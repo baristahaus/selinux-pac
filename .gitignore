@@ -30,3 +30,11 @@ demo/shopapi/target/
 policy_out/pr_body.md
 policy_out/pr_summary.md
 policy_out/findings.json
+site/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*

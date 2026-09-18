@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "selinux_pac",
+  "project_id": "bf5d1de5-4d62-4d24-9d23-0a9a8e17ce38"
+}
