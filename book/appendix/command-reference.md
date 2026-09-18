@@ -148,7 +148,7 @@ no guessed defaults.
 
 | Command | What it tells you or changes | Needs |
 |---|---|---|
-| `make check` | Offline health check: `test` (fixtures + static + smoke), `lint`, `book-check`; no SELinux host required | `laptop` |
+| `make check` | Offline health check: `test` (fixtures + static + smoke), `lint`, `book-check`; no SELinux host required, but the `deps` step wants `pip3` and the linters skip themselves when absent | `laptop` |
 | `make test-fixtures` | Runs `scripts/run_deterministic_fixtures.sh`, `scripts/run_deterministic_payments_check.sh`, `scripts/run_blast_radius_fixtures.sh`, and `scripts/run_tune_report_fixtures.sh` | `laptop` |
 | `make book` | Builds the HTML manual into `site/` via `python3 tools/book/build.py` | `laptop` |
 | `make book-check` | Validates the manual (internal links, anchors, `repo:` references) via `python3 tools/book/build.py --check` | `laptop` |

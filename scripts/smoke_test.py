@@ -669,12 +669,18 @@ def test_demo_e2e_scripts_dry_run() -> None:
         text=True,
     )
     mac_out = mac_run.stdout + mac_run.stderr
-    assert mac_run.returncode == 0, mac_out
-    assert_mentions(
-        mac_out, "shopapi", "/feature-spool", "demo_e2e_rhel_qa.sh", "selinux/shopapi"
-    )
-    assert "LAB ONLY" in mac_out
-    assert "soak_min_days" in mac_out
+    if sys.platform == "darwin":
+        assert mac_run.returncode == 0, mac_out
+        assert_mentions(
+            mac_out, "shopapi", "/feature-spool", "demo_e2e_rhel_qa.sh", "selinux/shopapi"
+        )
+        assert "LAB ONLY" in mac_out
+        assert "soak_min_days" in mac_out
+    else:
+        # Off a Mac the talk track refuses by design (e2e_require_mac): assert the
+        # refusal, so `make check` is a real offline health check on Linux too.
+        assert mac_run.returncode != 0, mac_out
+        assert "This script is the Mac talk track" in mac_out, mac_out
     mac_help = subprocess.run(
         [BASH, str(mac), "--help"],
         cwd=PROJECT_ROOT,
