@@ -95,9 +95,9 @@ category of question the book asks about.
 
 | Family | What it pins | Where it is documented |
 |---|---|---|
-| **`payments` checks** | `cli/deterministic_gen.py` must not emit `myapp` artifacts for the `payments` manifest | `scripts/run_deterministic_payments_check.sh`; `docs/examples/fixtures/payments/` |
+| **`payments` checks** | `cli/deterministic_gen.py` must not emit `myapp` artifacts for the `payments` manifest | `scripts/run_deterministic_payments_check.sh`; `config/payments.manifest.example.yml` |
 | **blast radius** | `scripts/classify_policy_blast_radius.sh` classifies candidate policy deltas against base policy | `tests/fixtures/blast_radius/`; `scripts/run_blast_radius_fixtures.sh` |
-| **`tune_report`** | `--tune-report` generates only host commands (no `.te`); it classifies vendor-domain denials | `docs/examples/fixtures/tune_report/tomcat/README.md`; `scripts/run_tune_report_fixtures.sh` |
+| **`tune_report`** | `--tune-report` generates only host commands (no `.te`); it classifies vendor-domain denials | `docs/examples/fixtures/tune_report/`; `scripts/run_tune_report_fixtures.sh` |
 | **`skip_ai`** | Offline demo fixture — `baseline/` is the "before" state, `generated/` is the "after" state, `avc.log` is the recorded audit | `docs/examples/fixtures/skip_ai/README.md`; `scripts/refresh_skip_ai_fixture.sh` |
 | **smoke tests** | Every classification verdict has at least one golden fixture row; every branch test in `classify_policy_blast_radius.sh`; boolean, FC, vendor, soak gates | `scripts/smoke_test.py` |
 

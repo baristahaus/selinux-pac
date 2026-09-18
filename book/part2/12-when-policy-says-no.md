@@ -12,7 +12,12 @@ Every `audit.log` line is the answer to one tuple. But when you reach for a rule
 | **Runtime denial for a missing rule** | the kernel | when `allow` is absent from your `.te` | write the rule, or label the object |
 | **Deliberate gate** | the CI / the generator | when your `.te` or `.fc` triggers a house rule | accept the verdict and adjust |
 
-A `neverallow` or a constraint sits on top of a base policy, typically in `selinux/policy/modules/system/` or a per-feature file such as `selinux/policy/modules/contrib/web/httpd.te`. The language lets a policy author forbid a specific tuple across every module compiled against that base: `neverallow myapp_t shadow_t:file { read open };`. A compile error from a `neverallow` is loud — it stops `make`, and `checkmodule` refuses to continue. The error line names the tuple that the base policy forbids.
+A `neverallow` or a constraint sits on top of a base policy, typically in the base policy's
+`policy/modules/system/` tree or a per-feature module such as `httpd.te` in the reference policy
+sources. The language lets a policy author forbid a specific tuple across every module compiled
+against that base: `neverallow myapp_t shadow_t:file { read open };`. A compile error from a
+`neverallow` is loud — it stops `make`, and `checkmodule` refuses to continue. The error line
+names the tuple that the base policy forbids.
 
 A rule outside the module cannot grant what the base policy forbids. If you ship a module with `allow myapp_t shadow_t:file read;` and the targeted policy carries a `neverallow` covering that tuple, the compile will fail regardless of your intent. The module you wrote is a layer above the base; it is not a patch over the base.
 

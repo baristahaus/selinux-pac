@@ -40,7 +40,7 @@ The first call covers the default `myapp` module on the repo root. The second, p
 
 `validate_forbidden_patterns.sh` runs on any machine with bash and Python 3 — laptop, CI, rhel-qa, no SELinux host required. It returns 0 only when every test passes; each `check_fail` call prints one specific error and sets `fail=1`.
 
-The **six** `grep -qE` patterns in `.te` that fail immediately, and the **six** additional conditions:
+Twelve refusals in total. Seven are regex checks against the `.te` — six on the shape of an `allow` line, one on a broad `var_t:file` write. One is a loop over the three high-privilege target types. The remaining four are structural: the `require` block (a Python check for custom types declared inside it), a `policy_module()` presence check, a check that the file mentions its own domain, and the `.fc` content check.
 
 | # | Pattern (text) | What it refuses |
 |---|---|---|

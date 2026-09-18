@@ -127,7 +127,7 @@ The generator writes `allow myapp_t myapp_port_t:tcp_socket name_bind;` into the
 
 ## boolean
 
-A `setsebool` decision that is *not* shipped in the policy module package. The generator checks `boolean_hints.yml` (curated overrides, consulted before live `sesearch`) and, when unavailable, falls back to `cli/sesearch` against `policy.kern`.
+A `setsebool` decision that is *not* shipped in the policy module package. The generator checks `boolean_hints.yml` (curated overrides, consulted before the live query) and, when the curated list does not answer it, falls back to a `sesearch` query against `policy.kern` — `cli/boolean_hints.py` is the module that runs it and parses the result.
 
 **From `docs/examples/fixtures/deterministic/04-boolean-network-connect/avc.log`:**
 
