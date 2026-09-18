@@ -172,9 +172,17 @@ $ bash scripts/monitor_avc.sh --domain shopapi_t --paths /var/lib/myapp,/var/log
 $ avc_filter_lines_by_paths "/var/lib/myapp,/var/log/myapp" shopapi_t
 # Step 3: export
 $ export_app_avcs_to_file shopapi_t
-# Step 4: preprocess
-$ python3 cli/avc_preprocess.py --in exported.avc --te selinux/myapp.te
+# Step 4: subtract what the installed policy already allows, and see what is left
+$ python3 cli/verify_avc_coverage.py \
+    --avc-log policy_out/avc.log \
+    --te selinux/myapp.te \
+    --manifest config/myapp.manifest.yml
 ```
+
+`cli/avc_preprocess.py` does the merge, dedupe and subtract work, but it is a
+module: the commands above are the entry points that call it
+(`verify_avc_coverage.py` reads the log against the candidate `.te` and prints
+the tuples the policy does not yet cover).
 
 The pipeline's filters keep: manifest-path hits; pathless non-file denials
 (name_bind, execmem); pathless file denials whose target type belongs to this

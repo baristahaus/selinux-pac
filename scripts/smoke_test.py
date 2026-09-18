@@ -1973,6 +1973,20 @@ chapters = [ { file = "01-one.md", title = "One" } ]
         problems, _ = module.check(module.load_book(book_dir), book_dir)
         assert not any("names a repository path" in problem for problem in problems), problems
 
+        # a command that runs a library module is not a command
+        (book_dir / "01-one.md").write_text(
+            "# One\n\n```bash\n$ python3 cli/avc_preprocess.py --in x\n```\n"
+        )
+        problems, _ = module.check(module.load_book(book_dir), book_dir)
+        assert any("__main__ guard" in problem for problem in problems), problems
+
+        # ... while a module that does define a CLI passes
+        (book_dir / "01-one.md").write_text(
+            "# One\n\n```bash\n$ python3 cli/verify_avc_coverage.py --help\n```\n"
+        )
+        problems, _ = module.check(module.load_book(book_dir), book_dir)
+        assert not any("__main__ guard" in problem for problem in problems), problems
+
 
 def main() -> int:
     tests = [

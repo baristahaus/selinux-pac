@@ -999,6 +999,8 @@ def write_sitemap(book: Book, out_root: Path) -> None:
 
 
 _SPAN = re.compile(r"`([^`]+)`")
+_PY_CALL = re.compile(r"python3\s+(cli/[A-Za-z0-9_]+\.py)")
+_CLI_MODULES = {}
 _REPO_DIRS = (
     "ansible",
     "cli",
@@ -1073,6 +1075,20 @@ def check(book: Book, book_dir: Path):
                         f"exist: {candidate}"
                     )
             if in_fence:
+                for called in _PY_CALL.findall(line):
+                    if not (REPO_ROOT / called).is_file():
+                        problems.append(
+                            f"{entry.file}:{line_no}: invokes a missing module: {called}"
+                        )
+                        continue
+                    if called not in _CLI_MODULES:
+                        source = (REPO_ROOT / called).read_text(encoding="utf-8")
+                        _CLI_MODULES[called] = '__name__ == "__main__"' in source
+                    if not _CLI_MODULES[called]:
+                        problems.append(
+                            f"{entry.file}:{line_no}: {called} has no __main__ guard, so "
+                            f"`python3 {called}` is not a command"
+                        )
                 if re.match(r"^\s*" + re.escape(marker) + r"\s*$", line):
                     in_fence = False
                 continue
