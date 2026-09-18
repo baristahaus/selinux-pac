@@ -174,35 +174,32 @@ Each `expected.json` row is a row in a file that says *this log, this verdict* �
 Pick up any laptop. No SELinux, no root.
 
 ```bash
-git clone https://github.com/<org>/selinux-pac.git
-cd selinux-pac
-make deps && make test-fixtures
+$ git clone https://github.com/<org>/selinux-pac.git
+$ cd selinux-pac
+$ make test-fixtures
 ```
 
-Every test should pass. Now add a fixture.
+The fixture suite needs nothing but `python3` — no SELinux, no root, no pip. (`make deps` installs `cli/requirements.txt`, which the paths that talk to a model need; the fixtures do not.)
+
+Every test should pass. Now add a fixture. The log must be one record per line, in the shape `ausearch` writes — the runner reads for `type=AVC` lines and ignores a wrapped record:
 
 ```bash
-mkdir docs/examples/fixtures/deterministic/99-temp-drift/
-cat > docs/examples/fixtures/deterministic/99-temp-drift/avc.log <<'AVC'
-avc: denied { write } for pid=9999 comm="demo" name="x"
-  path="/var/lib/myapp/x" dev="vda4" ino=99999
-  scontext=system_u:system_r:myapp_t:s0 tcontext=system_u:object_r:var_lib_t:s0
-  tclass=file permissive=1
+$ mkdir docs/examples/fixtures/deterministic/99-temp-drift/
+$ cat > docs/examples/fixtures/deterministic/99-temp-drift/avc.log <<'AVC'
+type=AVC msg=audit(1710009999.000:900): avc:  denied  { write } for  pid=9999 comm="demo" name="x" path="/var/lib/myapp/x" dev="vda4" ino=99999 scontext=system_u:system_r:myapp_t:s0 tcontext=system_u:object_r:var_lib_t:s0 tclass=file permissive=1
 AVC
-cat > docs/examples/fixtures/deterministic/99-temp-drift/expected.json <<'JSON'
+$ cat > docs/examples/fixtures/deterministic/99-temp-drift/expected.json <<'JSON'
 [
   { "verdict": "fc_drift", "tgt": "var_lib_t" }
 ]
 JSON
-make test-fixtures
+$ make test-fixtures
 ```
 
-Watch it fail the second time after editing a parser branch. Restore the fixture — that is the signal.
-
-Then remove it.
+It passes, because the path is already covered by the module's `.fc` — the fixture agrees with the decision the code already makes. Now edit a parser branch: flip the verdict the drift case produces, run `make test-fixtures` again, and watch the same fixture fail with the row it expected. That is the signal. Restore the branch, and the suite is green again. Then remove the fixture.
 
 ```bash
-rm -rf docs/examples/fixtures/deterministic/99-temp-drift/
+$ rm -rf docs/examples/fixtures/deterministic/99-temp-drift/
 ```
 
 That is the whole loop. The fixture is the test. The test is the decision. The decision is the specification.

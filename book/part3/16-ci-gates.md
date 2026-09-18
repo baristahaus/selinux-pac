@@ -153,47 +153,49 @@ The container does not persist state between runs; each run starts with a fresh 
 :::
 ::: try Run the gates locally
 
-Nothing here requires a host. Take a fresh clone of `selinux-pac` on your laptop and break one rule:
+Nothing here requires a host. Take a fresh clone of `selinux-pac` on your laptop and run the gate against a real module:
 
 ```bash
-cp -r selinux/shopapi /tmp/shopapi-gate-check
-POLICY_MODULE=shopapi SELINUX_DOMAIN=shopapi_t bash scripts/validate_forbidden_patterns.sh /tmp/shopapi-gate-check
+$ cp -r selinux/shopapi /tmp/shopapi-gate-check
+$ POLICY_MODULE=shopapi SELINUX_DOMAIN=shopapi_t \
+    bash scripts/validate_forbidden_patterns.sh /tmp/shopapi-gate-check
+[INFO] Checking forbidden patterns in /tmp/shopapi-gate-check/shopapi.te
+[INFO] Forbidden-pattern checks passed for shopapi
 ```
 
-`validate_forbidden_patterns.sh` will print:
+The module passes, because the gate is not there to catch the module that was written carefully. Now break it deliberately — one wildcard line is enough:
 
-```text
+```bash
+$ echo 'allow shopapi_t *:file read;' >> /tmp/shopapi-gate-check/shopapi.te
+$ POLICY_MODULE=shopapi SELINUX_DOMAIN=shopapi_t \
+    bash scripts/validate_forbidden_patterns.sh /tmp/shopapi-gate-check
+[INFO] Checking forbidden patterns in /tmp/shopapi-gate-check/shopapi.te
 [ERROR] Wildcard object type in allow rule
 ```
 
-and exit 1. That is the first gate. Now fix it and re-run:
+It exits 1. Remove the line and the gate is green again:
 
 ```bash
-sed -i 's/shopapi_t \*:/shopapi_t shopapi_var_lib_t:dir/' /tmp/shopapi-gate-check/shopapi.te
-bash scripts/validate_forbidden_patterns.sh /tmp/shopapi-gate-check
-```
-
-This time it prints:
-
-```text
+$ sed -i '/allow shopapi_t \*:file read;/d' /tmp/shopapi-gate-check/shopapi.te
+$ POLICY_MODULE=shopapi SELINUX_DOMAIN=shopapi_t \
+    bash scripts/validate_forbidden_patterns.sh /tmp/shopapi-gate-check
 [INFO] Forbidden-pattern checks passed for shopapi
 ```
+
+Both runs must carry `POLICY_MODULE` and `SELINUX_DOMAIN`: without them the script looks for `myapp.te` and fails with `[ERROR] Missing /tmp/shopapi-gate-check/myapp.te`, which is a different error about a different module.
 
 Then break the second rule — the version line, deliberately. This check reads the repository's own files, so edit the tracked module and undo it with `git` afterwards:
 
 ```bash
-sed -i 's/policy_module(shopapi, 1\.0\.0)/policy_module(shopapi, 0.0.999)/' selinux/shopapi/shopapi.te
-bash scripts/validate_version_consistency.sh
-git checkout -- selinux/shopapi/shopapi.te
+$ sed -i 's/policy_module(shopapi, 1\.0\.0)/policy_module(shopapi, 0.0.999)/' selinux/shopapi/shopapi.te
+$ bash scripts/validate_version_consistency.sh
+validate_version_consistency: payments OK (1.0.0)
+validate_version_consistency: myapp OK (1.1.3)
+validate_version_consistency: shopapi: /path/to/selinux-pac/selinux/shopapi/policy_version.txt (1.0.0) != policy_module in /path/to/selinux-pac/selinux/shopapi/shopapi.te (0.0.999)
+$ git checkout -- selinux/shopapi/shopapi.te
 ```
 
-This time it prints:
-
-```text
-validate_version_consistency: shopapi: selinux/shopapi/policy_version.txt (1.0.0) != policy_module in selinux/shopapi/shopapi.te (0.0.999)
-```
-
-and exits 1. `git checkout` restores the real version; run the check once more and both gates pass again. Both checks are one command each, and they are the same commands CI runs.
+It exits 1, and the message names both files by absolute path. `git checkout` restores the real version; run the check once more and both gates pass again. Both checks are one command each, and they are the same commands CI runs.
 :::
 
 ## What you can do now
