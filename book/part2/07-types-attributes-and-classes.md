@@ -107,12 +107,12 @@ logging_log_file(myapp_log_t)      # tag myapp_log_t as a generic log file
 
 `myapp_log_t` appears once, tagged by `logging_log_file()` — the module does not also declare it with `files_type()`, because `logging_log_file()` calls `files_type()` itself.
 
-Each of these lines declares the type, attaches an attribute, and triggers an interface that writes
-the allow rules for the entire family in one call. The result is twelve allow rules that a
-reviewer can read in a second: every file-tagged type inherits `read` and `open` from
-`read_files_pattern`; every PID-tagged type inherits search from `files_search_pids`; every
-network-port-tagged type inherits `name_bind` from `corenet_tcp_bind_generic_node`; every
-log-tagged type inherits `logging_log_filetrans` and file-management from `manage_files_pattern`.
+Each of these lines declares the type and attaches it to an attribute family. The effect is that the
+base policy's file, pid-file, port and log rules now cover these types — a handful of declarations
+standing in for a rule per type. Every file-tagged type is covered by `read_files_pattern`; every
+PID-tagged type by the pid-file rules (`files_search_pids` and friends); every port-tagged type can
+be bound once the domain has `name_bind`; every log-tagged type is covered by
+`logging_log_filetrans` and the log-management patterns.
 
 The attribute is how an interface writes rules for *all* types of its class, not just one. The
 author writes one `typeattribute` line, the interface writes all the allows. This is the

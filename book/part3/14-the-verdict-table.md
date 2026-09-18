@@ -269,7 +269,7 @@ The generator prints the banner from `emit_sepolgen_warning()` in `cli/determini
 
 ## forbidden
 
-A target type whose allow is held to be too wide for an app domain. `FORBIDDEN_TARGET_TYPES` (in `cli/policy_rules.py`) enumerates the five types: `shadow_t`, `unconfined_t`, `sysadm_t`, `security_t`, `selinux_config_t`, `passwd_file_t`.
+A target type whose allow is held to be too wide for an app domain. `FORBIDDEN_TARGET_TYPES` (in `cli/policy_rules.py`) enumerates the six types: `shadow_t`, `unconfined_t`, `sysadm_t`, `security_t`, `selinux_config_t`, `passwd_file_t`.
 
 **From `docs/examples/fixtures/deterministic/03-shadow-read/avc.log`:**
 
