@@ -130,9 +130,9 @@ It does the translation for you — takes a `scontext`/`tcontext`/`tclass`/
 grant it. That is what it does, and that is why it needs a human decision
 afterwards.
 
-The mechanics live in earlier chapters — Chapter 5 covers `.te` syntax,
-Chapter 6 covers `semanage` and policy install, Chapter 9 covers the
-permissive-vs-enforcing decision. `audit2why` is the translation step
+The mechanics live in earlier chapters — Chapter 6 covers the module files and the install path,
+Chapter 8 covers every `allow` rule, Chapter 5 covers the permissive-versus-enforcing decision, and
+Chapter 9 takes the label lifecycle. `audit2why` is the translation step
 between the log and the policy — every rule it generates is a candidate for
 the generator's PR.
 
