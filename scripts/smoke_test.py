@@ -1961,6 +1961,18 @@ chapters = [ { file = "01-one.md", title = "One" } ]
         problems, _ = module.check(module.load_book(book_dir), book_dir)
         assert any("does not exist" in problem for problem in problems), problems
 
+        # a code span that names a repository path is a claim; a stale path fails the build
+        (book_dir / "01-one.md").write_text("# One\n\nRun `scripts/no_such_script.sh`.\n")
+        problems, _ = module.check(module.load_book(book_dir), book_dir)
+        assert any("names a repository path" in problem for problem in problems), problems
+
+        # ... while an on-host or gitignored runtime path is not a repository path
+        (book_dir / "01-one.md").write_text(
+            "# One\n\nWritten to `ansible/inventory.dev.yml` on the controller.\n"
+        )
+        problems, _ = module.check(module.load_book(book_dir), book_dir)
+        assert not any("names a repository path" in problem for problem in problems), problems
+
 
 def main() -> int:
     tests = [

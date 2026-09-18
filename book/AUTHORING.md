@@ -67,6 +67,12 @@ Not supported: footnotes, setext headings (`===` under a line), HTML comments, d
 Cross-chapter anchors are validated, so if you rename a heading you must fix the links to it.
 Prefer adding an explicit anchor (`## Heading {#stable-id}`) for anything another chapter cites.
 
+A code span that names a repository path is also a claim: `` `scripts/dev_generate_policy.sh` ``,
+`` `selinux/myapp.fc` `` and `` `config/myapp.manifest.yml` `` must exist in the worktree, or
+`make book-check` fails. Build artefacts and gitignored runtime files (`selinux/myapp.pp`,
+`ansible/inventory.dev.yml`, `packaging/internal.env`) are exempt — see `_PATH_EXCEPTIONS` in
+`tools/book/build.py`.
+
 ## Voice and accuracy
 
 - Second person, short paragraphs, why before how, then show it. No marketing, no emoji, no

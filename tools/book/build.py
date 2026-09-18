@@ -998,6 +998,57 @@ def write_sitemap(book: Book, out_root: Path) -> None:
     )
 
 
+_SPAN = re.compile(r"`([^`]+)`")
+_REPO_DIRS = (
+    "ansible",
+    "cli",
+    "config",
+    "demo",
+    "docs",
+    "packaging",
+    "scripts",
+    "selinux",
+    "tests",
+    "tools",
+    "book",
+    ".github",
+)
+
+# Paths the prose is allowed to name even though no such file is committed:
+# build artefacts and runtime locations that live on a host or are gitignored.
+_PATH_EXCEPTIONS = {
+    "selinux/myapp.pp",
+    "selinux/shopapi/shopapi.pp",
+    "selinux/payments/payments.pp",
+    "policy_out/avc.log",
+    "policy_out/findings.json",
+    "policy_out/myapp.te",
+    "policy_out/myapp.fc",
+    "ansible/inventory.dev.yml",
+    "ansible/inventory.production.yml",
+    "ansible/inventory.staging.yml",
+    "packaging/internal.env",
+    "cli/.env",
+}
+
+
+def looks_like_repo_path(token: str) -> bool:
+    candidate = token.strip().rstrip(".,;:")
+    if not candidate or "/" not in candidate:
+        return False
+    if candidate.startswith(("/", "~", "-", "http", "$")):
+        return False
+    # placeholders, globs and shell fragments are not paths
+    if any(ch in candidate for ch in "<>*%{}|()$'\"`"):
+        return False
+    if candidate.endswith("/"):
+        return False
+    head = candidate.split("/", 1)[0]
+    if head not in _REPO_DIRS:
+        return False
+    return bool(re.search(r"\.[A-Za-z0-9]+$", candidate))
+
+
 def check(book: Book, book_dir: Path):
     problems, warnings, _ = render_all(book, book_dir, None)
     pages = {entry.slug: entry for entry in book.entries}
@@ -1010,6 +1061,17 @@ def check(book: Book, book_dir: Path):
         in_fence = False
         marker = ""
         for line_no, line in enumerate(source.read_text(encoding="utf-8").split("\n"), 1):
+            for token in _SPAN.findall(line):
+                if not looks_like_repo_path(token):
+                    continue
+                candidate = token.strip().rstrip(".,;:")
+                if candidate in _PATH_EXCEPTIONS:
+                    continue
+                if not (REPO_ROOT / candidate).exists():
+                    problems.append(
+                        f"{entry.file}:{line_no}: names a repository path that does not "
+                        f"exist: {candidate}"
+                    )
             if in_fence:
                 if re.match(r"^\s*" + re.escape(marker) + r"\s*$", line):
                     in_fence = False
