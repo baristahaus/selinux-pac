@@ -1,0 +1,59 @@
+# Build the HTML manual from book/ and publish it to GitHub Pages.
+# The build is zero-dependency Python: validation runs on every pull request,
+# deployment only from main. Enable once in the repository settings:
+#   Settings -> Pages -> Build and deployment -> Source: GitHub Actions
+name: Book site
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "book/**"
+      - "tools/book/**"
+      - ".github/workflows/book.yml"
+  pull_request:
+    paths:
+      - "book/**"
+      - "tools/book/**"
+      - ".github/workflows/book.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: book-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build-book
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate the manual (links, anchors, repo references)
+        run: python3 tools/book/build.py --check
+      - name: Build the manual
+        run: python3 tools/book/build.py
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: deploy-book
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

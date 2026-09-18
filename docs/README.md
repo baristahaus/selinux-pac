@@ -2,6 +2,8 @@
 
 Guides are numbered like a course. **100** = learn, **200** = demo and develop, **300** = ship.
 
+> **The book.** *SELinux for Developers and Administrators* is the long-form manual built from this repository: twenty-five chapters from one denial to a reviewed module in production, plus reference appendices. Its sources are in [`../book/`](../book/), it is validated by `make book-check` (part of `make check`), and [`.github/workflows/book.yml`](../.github/workflows/book.yml) publishes it to GitHub Pages at `https://anurag-saran.github.io/selinux-pac/` once Pages is enabled in the repository settings. Writers start at [`../book/AUTHORING.md`](../book/AUTHORING.md).
+
 | Band | Meaning | Start |
 |------|---------|--------|
 | **100** | Labels, one AVC, generate a module | **[101](training/101-SELINUX.md)** then **[102](training/102-SELINUX_BASICS.md)** |
