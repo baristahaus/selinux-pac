@@ -1,6 +1,6 @@
 # Reviewing a Policy Pull Request
 
-> A pull request is the cheapest place to catch a dangerous rule. After it ships, the host.
+> A pull request is the cheapest place to catch a dangerous rule. After it ships, it lives on a host, and the only controls left are canary, soak and rollback.
 
 Every rule in `myapp.te` is one answer to one tuple of four values. When that rule arrives in a pull request, the reviewer's job is to decide whether it is justified by evidence and narrow enough to defend. A generator already wrote the rule from an AVC log; CI already ran the forbidden-patterns gate; the admin already asked for a policy summary in plain English. But the summary and the diff both sit in the same file, and the reviewer is the only human reading both.
 
@@ -54,4 +54,11 @@ Each question catches one failure mode. Each failure mode shows up in a differen
 | What breaks if the app is not started at all? | a rule that depends on live state | `.fc` + manifest + soak plan |
 | How is this rolled back? | a rule the admin cannot undo | admin checklist + `303-DENIAL_RESPONSE.md` |
 
-Each row is a single question. Each row catches a single failure. Each question is written by hand in the PR template's security checklist — section 6 of the template. The checklist is the contract. The questions are the contract. The review is the contract.
+The checklist in the pull request template is the record of these questions. The gates answer the mechanical ones — compile, forbidden patterns, version consistency, the access delta — and the table above is what remains: the questions only a human can answer before a module reaches a host.
+
+## What you can do now
+
+- **Read the diff in layer order.** Manifest, `.te`, `.fc`, access delta, version, refused shapes. Each one catches what the previous cannot.
+- **Ask the one question that has no gate:** is the target type narrow enough to defend? If the rule names a category where the denial named a path, the rule is wider than its evidence.
+- **Refuse the shapes.** A rule that reaches `shadow_t`, a bare `self:*` grant, a `bin_t` execute, or a generic port type is refused by the template's checklist — recognise it before the checklist does.
+- **Send the reviewer's own answer back into the tooling.** A rule that passes review but adds no evidence-backed access is a generator bug, and the fixture that pins that verdict is where it gets fixed.
