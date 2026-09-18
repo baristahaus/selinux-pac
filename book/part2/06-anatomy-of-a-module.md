@@ -20,7 +20,7 @@ different piece of tooling, and each kind has a single responsibility.
 | `module.te` | Type enforcement — types, attributes, `allow` rules, `type_transition` | `checkmodule` during build; the policy editor and reviewers; Chapter 8 reads every rule |
 | `module.fc` | File contexts — what label each path on disk carries | `restorecon` / `matchpathcon` at install time; Chapter 9 follows every line |
 | `module.if` | Interfaces — `policy_module`-level contracts for other modules to call | the author (uses `gen_require`); Chapter 8 describes how to call them and when `optional_policy` is the safe choice |
-| `module.pp` | Compiled binary package — the CIL the kernel loads | `semodule -i` at runtime; Chapter 19 describes how it arrives in production |
+| `module.pp` | Compiled module package — the `.mod` plus the `.fc`, which `semodule -i` links into the loaded binary policy | `semodule -i` at runtime; Chapter 19 describes how it arrives in production |
 
 `module.pp` is never authored by hand. It is produced by
 `checkmodule` (which turns `.te` into `.mod`) and
@@ -70,11 +70,14 @@ directions at once; the repository trusts neither: `validate_version_consistency
 fails the CI if they disagree.
 
 ```text
+validate_version_consistency: payments OK (1.0.0)
 validate_version_consistency: myapp OK (1.1.3)
 validate_version_consistency: shopapi OK (1.0.0)
-validate_version_consistency: payments OK (1.0.0)
 validate_version_consistency: all modules OK
 ```
+
+The order is just `find … | sort` over the `policy_version.txt` files; what matters is that every
+module is listed and the last line is the summary.
 
 The same script also checks that `packaging/<module>-selinux.spec` reads
 `Version: %{modver}` rather than hard-coding a number — because `rpmbuild`
@@ -180,11 +183,12 @@ and `/var/opt/myapp/backend_stub.py`. Every submodule gets its own
 
 ```text
 files_read_etc_files(myapp_t)
-The same block for myapp_backend_t mirrors this at /opt/myapp/backend_stub.py
-and /var/opt/myapp/backend_stub.py.
+sysnet_read_config(myapp_t)
+kernel_read_system_state(myapp_t)
+dev_read_urand(myapp_t)
 ```
 
-These four macros give the domain the minimum each long-running process needs under enforcing: read /etc/, read system configs, poll the kernel, and consume randomness. They apply to each domain separately. The comment above the section is not decoration: review once as a unit; do not widen one AVC at a time via generated PRs — Chapter 15 codifies that rule.
+These four macros give the domain the minimum each long-running process needs under enforcing: read /etc/, read system configs, poll the kernel, and consume randomness. `myapp_backend_t` gets the mirrored set on the next lines, because the baseline applies per domain. The comment above the section is not decoration: review once as a unit; do not widen one AVC at a time via generated PRs — Chapter 15 codifies that rule.
 
 ### The remaining sections
 
@@ -260,17 +264,24 @@ policy store. There are four commands every operator should know.
 
 | Command | Purpose |
 |---------|---------|
-`semodule -i` is the *install* path. After it, `restorecon -Rv -n` is the
+| `semodule -i selinux/myapp.pp` | install or replace a module in the running policy store |
+| `semodule -l` | list the enabled modules by name; `-lfull` adds the priority, the language extension, and a `disabled` marker |
+| `semodule -r myapp` | remove the module from the store |
+| `semodule -D` / `semodule -B` | rebuild the store with `dontaudit` rules removed (`-D`) or restored (`-B`) |
+
+`semodule -i` is the *install* path. After it, `restorecon -Rv` is the
 *labels* path — every line in `module.fc` becomes a label on the matching path.
 Both must happen; without `semodule -i` the policy has no rule for the new
-type, and without `restorecon` the new type has no label on disk.
+type, and without `restorecon` the new type has no label on disk. (`-n` is the
+dry run: it prints what would change and writes nothing.)
 
-Where the modules live: `/var/lib/selinux/<profile>/packages/` — typically
-/var/lib/selinux/targeted/packages/. semodule -l reads from the same directory
-and shows each installed module's name and enabled status; semodule -DB prints
-each module's CIL into that same path for an operator who needs to read the
-compiled policy without tools on the box. Each module lives there until it
-is removed.
+Where the modules live: the libsemanage store, `/var/lib/selinux/<store>/active/`, with one
+directory per module under `active/modules/` — typically `/var/lib/selinux/targeted/active/`. The
+compiled kernel policy that `semodule -i` writes sits beside them as `active/policy.kern`, and that
+is the path the repository's generated header records. `semodule -l` reads the store's module
+index. And `semodule -DB` is not an export: it rebuilds the policy with `dontaudit` rules removed
+— the canary stage runs it so a denial the policy deliberately silenced cannot hide during soak.
+To read a module's compiled form, extract it: `semodule --extract=myapp --cil` writes CIL.
 
 On a lab host, semodule -i is the action that proves a policy works against
 an application — run the app, show the AVC log is empty for the expected
@@ -294,6 +305,8 @@ selinux-policy-devel-38.1.75-2.el9_8.noarch
 $ cd selinux-pac
 $ POLICY_MODULE=myapp SELINUX_DOMAIN=myapp_t \
     bash scripts/compile_and_validate.sh selinux
+[INFO] Checking forbidden patterns in selinux/myapp.te
+[INFO] Forbidden-pattern checks passed for myapp
 [INFO] Static checks on selinux/myapp.te
 [INFO] Compiling myapp in selinux via refpolicy Makefile
 make -C /tmp/... -f /usr/share/selinux/devel/Makefile myapp.pp
@@ -305,7 +318,11 @@ $ sudo semodule -i selinux/myapp.pp
 
 # List what is installed; this is what your playbook reads before deploy
 $ semodule -l | grep myapp
-myapp                     Active     397 7748
+myapp
+# -lfull prints four columns: priority, name, language extension,
+# and the word "disabled" for modules that are present but off
+$ semodule -lfull | grep myapp
+100 myapp pp
 
 # Clean it up (you are done — it was a lab action)
 $ sudo semodule -r myapp
@@ -319,7 +336,8 @@ RPM, and the RPM arrives in production through a signed canary.
 
 You now know what a policy module is built out of, where each part lives, and
 how the module leaves the Git repository: as `module.pp`, built on RHEL with
-`checkmodule`/`semodule_package`, signed by `rpmbuild`, shipped through AAP.
+`checkmodule`/`semodule_package`, signed with `rpmsign` in
+`packaging/publish_internal.sh`, shipped through AAP.
 In Chapter 7 you meet the types, attributes and classes that the kernel reads
 at every decision — and Chapter 8 lets you read every `allow` rule you just
 met in `myapp.te` out loud.

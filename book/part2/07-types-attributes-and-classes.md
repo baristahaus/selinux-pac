@@ -17,7 +17,7 @@ allow rules, in file-context lines, and in `sesearch` queries. The type is the t
 tools talk about.
 
 In the example module (`selinux/myapp.te`), every line of type declarations is a purpose
-statement — each type is tied to a path, a port, or a role. There are thirty-two types declared
+statement — each type is tied to a path, a port, or a role. There are eleven types declared
 for a single application, each one *owned* by its purpose:
 
 ```text
@@ -85,10 +85,10 @@ A type can be *tagged* with an attribute without rewriting rules. An attribute i
 type that lets a single allow rule address a whole family.
 
 ```text
-typeattribute myapp_var_lib_t files_type;
+typeattribute myapp_var_lib_t file_type;
 ```
 
-That line says: *every type tagged with `files_type` behaves like a file.* The kernel does not
+That line says: *every rule written against `file_type` now covers this type.* The kernel does not
 gain new semantics — the `file` object class was always `file` — but the policy author gains a
 shorthand. Every interface that takes an *attribute* targets every tagged type at once:
 
@@ -96,7 +96,6 @@ shorthand. Every interface that takes an *attribute* targets every tagged type a
 files_type(myapp_lib_t)        # tag myapp_lib_t as a generic file
 files_type(myapp_var_lib_t)    # tag myapp_var_lib_t as a generic file
 files_pid_file(myapp_var_run_t) # tag myapp_var_run_t as a PID file
-files_type(myapp_log_t)        # tag myapp_log_t as a generic file
 files_type(myapp_script_exec_t)
 files_type(myapp_backend_exec_t)
 
@@ -105,6 +104,8 @@ corenet_port(myapp_backend_port_t) # tag myapp_backend_port_t as a generic netwo
 
 logging_log_file(myapp_log_t)      # tag myapp_log_t as a generic log file
 ```
+
+`myapp_log_t` appears once, tagged by `logging_log_file()` — the module does not also declare it with `files_type()`, because `logging_log_file()` calls `files_type()` itself.
 
 Each of these lines declares the type, attaches an attribute, and triggers an interface that writes
 the allow rules for the entire family in one call. The result is twelve allow rules that a
@@ -122,19 +123,21 @@ difference between "ten rules per type" and "one rule per class."
 The macros in the example module are not custom — they are refpolicy interfaces, each of which
 pairs an attribute with a predictable set of allows. The ones you will see most often:
 
-| Macro | Attribute attached | Allows |
+| Macro | What it attaches | What follows from it |
 |---|---|---|
-| `files_type(TYPE)` | `files_type` | `read_files_pattern(TYPE)`, `list_dirs_pattern(TYPE)` |
-| `files_pid_file(TYPE)` | `pid_file_type` | search and read of PID files |
-| `files_log_file(TYPE)` | `log_file_type` | read and open of log data |
-| `corenet_port(TYPE)` | `corenet_all_port_type` | `corenet_tcp_bind_generic_node(TYPE)`, `corenet_udp_bind_generic_node(TYPE)` |
-| `logging_log_file(TYPE)` | `log_file_type` | `manage_files_pattern`, `manage_dirs_pattern`, `logging_log_filetrans` |
-| `init_daemon_domain(SRC, TYPE)` | process + file | `type_transition` from `init_t` to the domain on the labeled entrypoint |
-| `init_daemon_run_dir(TYPE, NAME)` | `tmp_var_run_file_type` | directory creation rights under `/var/run` |
+| `files_type(TYPE)` | the file family: `file_type`, `non_security_file_type`, `non_auth_file_type` | rules written against those attributes now cover `TYPE` |
+| `logging_log_file(TYPE)` | `logfile`, and it calls `files_type()` plus the tmpfs associations itself | log-file rules and `logging_log_filetrans` cover `TYPE`; you do not also call `files_type()` |
+| `files_pid_file(TYPE)` | the base policy's pid-file attribute | the pid-file rules (`files_search_pids`, pid-file management) cover `TYPE` |
+| `corenet_port(TYPE)` | the port-type attribute | `TYPE` can be used as a port label; binding it is a separate allow the module writes (`corenet_tcp_bind_generic_node(myapp_t)`) |
+| `init_daemon_domain(DOMAIN, EXEC)` | `daemon`, then `domain_type()` and `domain_entry_file()` | a `domtrans_pattern(initrc_t, EXEC, DOMAIN)` transition, and under the systemd build `init_domain()` as well |
+| `init_daemon_run_dir(TYPE, NAME)` | the run-directory association for the service | the init domain may create the runtime path for `NAME`; the domain's own access to it is written separately |
 
-These are not invented by the module author — they come from the refpolicy library. The names
-appear in `allow` rules written by the build; the author only writes the declarations and the
-`typeattribute` lines.
+These are not invented by the module author — they come from the refpolicy library, and the
+interface body is the authority: read it at
+`/usr/share/selinux/devel/include/kernel/files.if` (and `system/logging.if`,
+`system/init.if`) on any host with `selinux-policy-devel` installed. The names appear in `allow`
+rules written by the build; the author writes the declarations, and `seinfo -a` lists the
+attributes that actually exist in the policy you are running.
 
 ## Object classes and permissions
 
@@ -151,10 +154,10 @@ what a service author will meet in practice, taken from the base policy object-c
 | `lnk_file` | symlinks | `read`, `getattr` |
 | `tcp_socket` | TCP sockets | `bind`, `name_bind`, `listen`, `accept`, `connect`, `name_connect`, `read`, `write`, `shutdown` |
 | `udp_socket` | UDP sockets | `bind`, `create`, `read`, `write` |
-| `unix_stream_socket` | Unix domain sockets | `connectto`, `create`, `bind`, `listen`, `accept`, `read`, `write`, `setattr`, `unlink` |
+| `unix_stream_socket` | Unix domain sockets | `connectto`, `create`, `bind`, `listen`, `accept`, `read`, `write`, `setattr` |
 | `process` | running processes | `fork`, `transition`, `dyntransition`, `sigchld`, `siginh`, `rlimitinh`, `execmem` |
 | `capability` | kernel capabilities | `net_bind_service`, `dac_override`, `chown`, `fowner`, `sys_resource` |
-| `system` | policy-level objects | `module_load`, `reload`, `check_policy` |
+| `system` | policy-level objects | `module_load`, `syslog_read`, `syslog_mod`, `syslog_console` |
 | `unix_dgram_socket` | Unix datagram sockets | `send`, `recv`, `read`, `write` |
 
 The most important column is the third — permissions that appear in *every* denial. A process
@@ -254,10 +257,12 @@ if grep -qE 'allow[[:space:]]+[^[:space:]]+[[:space:]]+var_t:file[[:space:]]+\{[
 fi
 ```
 
-The pattern against a broad port grant is not named in that script — the port verdict is handled
-by `cli/policy_rules.py` as the *direct-allow* filter: every allow against `unreserved_port_t`,
-`port_t`, `reserved_port_t`, or `ephemeral_port_t` is classified as a `direct` verdict and flagged
-for replacement with a dedicated module-private port type.
+The pattern against a broad port grant is not named in that script — the classification lives in
+`cli/deterministic_gen.py`, with the constant sets in `cli/policy_rules.py`: an allow whose target
+is one of the generic port types (`unreserved_port_t`, `port_t`, `reserved_port_t`,
+`ephemeral_port_t`) and whose permission set includes `name_bind` is classified as
+`private_port`, with `next_action: add_manifest_port` — the port type is the fix, not the allow.
+`direct` is a different verdict, for the allows that name the module's own private types.
 
 The `validate_policy_semantics.sh` script goes further: it asserts on the compiled module that no
 `allow` reaches `shadow_t` or `unlabeled_t`, and that every `entrypoint` allow names only a type
@@ -299,7 +304,7 @@ allow rows. Read the rows against generic types first: they are the ones the rev
 | list allows against a target type | `sesearch --allow -t myapp_var_lib_t` | the scope of your type's allow rows |
 | check a deny before adding a rule | `sesearch -A -s myapp_t -c file` | the row may already exist |
 | declare a dedicated type | `type myapp_spool_t;` | the smallest possible name for a path |
-| tag an attribute | `typeattribute myapp_spool_t files_type;` | one interface call instead of ten rules |
+| tag an attribute | `typeattribute myapp_spool_t file_type;` | one interface call instead of ten rules |
 
 The chapter's takeaway is not new syntax — it is a reading habit. When you read an allow rule,
 read the target type name first: *does this name match the path, or does it match a category?*

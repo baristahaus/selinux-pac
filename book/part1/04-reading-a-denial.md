@@ -53,8 +53,8 @@ Each command answers a different question about the same line.
 |------|---------|---------------------|----------------------|
 | `ausearch -m avc -ts recent` | Pulls every AVC from the audit log | *What is happening right now?* | First thing on the host; gives the raw lines |
 | `ausearch -i` | Decodes identifiers (PIDs, users, files) | *Who owns this process? which file was it? what does this UID belong to?* | When you need the human-meaning behind the machine identifiers |
-| `aureport --avc` | Summarises denials into per-process / per-host reports | *What is the volume? which process denies most?* | For dashboards and on-call triage |
-| `audit2why` | Reads one line, finds the allow rule that is missing | *Is this denial covered by existing policy?* | Before adding a rule — answers "should we add, or should we relabel / change the code?" |
+| `aureport --avc` | Summarises AVCs into a per-event report, with counts | *What is the volume, and when did it spike?* | For dashboards and on-call triage; `aureport -p` gives the per-process view |
+| `audit2why` | Explains *why* one denial happened — a missing TE allow, or a boolean that would have permitted it | *Should we add a rule, or is a supported knob the answer?* | Before adding a rule; the rule text itself is what `audit2allow` prints |
 
 The most common mistake is piping `audit2allow` directly into `semodule -i`. That command is a *generator* — it emits the smallest rule that removes the denial on that tuple. It is **not** a reviewed artifact and it is **not** a command to install. `audit2allow` names the target type, but never the review: is that target type a category covering thousands of files? Is the permission appropriate for the code path? Every generated rule becomes a pull request that CI gates before it ships. Chapter 16 covers the gates in full; Chapter 17 covers how a human reads the diff.
 
@@ -106,24 +106,24 @@ The **correct answer** is two changes: one line of file-context policy, naming t
 
 Every line in the fixtures carries `permissive=1`. That is not decoration: it is the operating condition for staging and soak. A permissive domain logs on every attempt; the application keeps running. An admin looks at the service and sees health. The alert fires only when the *net-new access needs* exceed the threshold.
 
-```text
-::: warn
-`permissive=1` is not success.
+:::: warn `permissive=1` is not success
 The application runs while being denied. An intermittent data path failure, or a security control that silently does nothing, is common. Read this flag as "this would have broken in Enforcing" — and treat every net-new denial during soak as a blocking signal, even though the service appears healthy.
-:::
+::::
 
-When you take a domain off permissive, the first denial after that flip is not a regression. It is the state you already knew about: the application failed while permissive, the log carried the memory. Enforcing surface that condition.
+When you take a domain off permissive, the first denial after that flip is not a regression. It is the state you already knew about: the application failed while permissive, and the log carries the memory. Enforcing surfaces that condition.
 
 ## Exporting evidence — the way this repository does it
 
 The audit log contains every domain on the host. `policy_out/avc.log` does not; it carries only the lines relevant to the application being reviewed. `scripts/monitor_avc.sh` performs that filtering during permissive soak: it queries each named domain across a window (`--since`, default `recent`), filters by path substrings, and runs `cli/soak_net_new.py` against the matches to classify each as net-new or covered. The script needs root or a SELinux-enabled RHEL host — `ausearch` and `/var/log/audit/audit.log` are not present on a laptop — and its failure mode is "soak_net_new.py missing on this host" or "sesearch / policy.kern failed".
 
-The output it produces is structured: a JSON payload with the domain, the count, the net-new threshold, the fail-closed reason, and the last ten matching event lines. On `rhel-qa`, this is the command that keeps the canary honest:
+The output is structured, and the two formats answer different questions. `--format json` writes a payload with the domain, the window, the raw count, the net-new count, the thresholds, the fail-closed reason and any exceptions — no event lines. The default text format prints the summary and, with `--show-lines` (default 10), the last matching audit lines under it. On `rhel-qa`, this is the command that keeps the canary honest:
 
 ```bash
 # On rhel-qa, as root
 $ sudo bash scripts/monitor_avc.sh --domain myapp_t --paths "/var/lib/myapp,/run/myapp" --max-avc 100 --max-net-new 3
 ```
+
+Add `--format json` when a pipeline consumes the result, and `--show-lines 0` when it should not print audit lines into a log it will hand to someone else.
 
 On a laptop without SELinux, the same reading works against the fixture:
 

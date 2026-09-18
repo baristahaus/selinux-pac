@@ -58,11 +58,11 @@ security.selinux="system_u:object_r:myapp_exec_t:s0"
 
 ## How a file gets its label
 
-At creation time, the kernel looks at the file-context list in the policy and compares each line to the path being created. The first matching line wins: the new inode receives that type.
+At creation time the kernel does not read this list. A new inode gets its type from its parent directory plus any `type_transition` rule that names it, or from a user-space `setfscreatecon` when the program asks for a specific label. The `.fc` entries are a table for user space: they are compiled into the policy's file-context table, and `restorecon` and `matchpathcon` are the tools that consult it.
 
-This is a live rule. A file created *before* a labelling entry was added keeps whatever it got — even if the policy later says the path should carry a dedicated type. `restorecon` repairs it: it walks the policy list, matches the path, and rewrites the inode.
+That is why the rule has to be applied, not merely written. A file created *before* a labelling entry was added keeps the type it got — even when the policy now says that path should carry a dedicated type. `restorecon` repairs it: it walks the compiled table, matches the path, and rewrites the inode.
 
-```bash title="The kernel reads your .fc at creation time"
+```bash title="What your .fc compiles into"
 $ cat selinux/myapp.fc | head -n 3
 /opt/myapp                                 gen_context(system_u:object_r:myapp_exec_t,s0)
 /opt/myapp/app\.py                         gen_context(system_u:object_r:myapp_exec_t,s0)
@@ -123,10 +123,10 @@ When the policy says "processes labelled `shopapi_t` may write to files labelled
 Each `allow` rule names specific types on each side. If a project declares fifty log types, you do not write fifty `allow … logging_log_t` lines. Instead you give each type a **shared attribute**, and rules name the attribute:
 
 ```text
-files_type(shopapi_log_t)
+logging_log_file(shopapi_log_t)
 ```
 
-That line from `selinux/shopapi/shopapi.te` (line 27) says: *any rule that names `logging_log_file` also applies to `shopapi_log_t`*. The same pattern covers every log type in the base policy; the same applies to network ports (`corenet_port()`) and PID files (`files_pid_file()`).
+That line from `selinux/shopapi/shopapi.te` (line 27) puts `shopapi_log_t` into the base policy's log-file group, so every rule written against that group also covers `shopapi_log_t`. The same pattern covers every log type in the base policy; the same applies to network ports (`corenet_port()`) and PID files (`files_pid_file()`).
 
 ```text
 # in the base policy, a rule that reads log files:
@@ -145,13 +145,14 @@ An attribute is not a new kind of permission. It is a *named group* of types. Ad
 Here is the whole path — from policy file to running process — traced against `myapp.te`:
 
 ```bash title="The entrypoint → transition pair"
-$ sed -n '39,53p' selinux/myapp.te
+$ sed -n '35,53p' selinux/myapp.te
 require {
     type init_t;
     class process { transition dyntransition siginh rlimitinh };
     class file entrypoint;
 }
 
+# systemd (init_t) starts user units on FCOS — transition on labeled entrypoints
 allow init_t myapp_exec_t:file { execute read open getattr map ioctl execute_no_trans entrypoint };
 allow init_t myapp_t:process { transition dyntransition siginh rlimitinh };
 allow myapp_t myapp_exec_t:file entrypoint;
@@ -159,6 +160,11 @@ type_transition init_t myapp_exec_t:process myapp_t;
 
 allow init_t myapp_lib_t:dir { search getattr open read };
 allow init_t myapp_lib_t:file { read open getattr map ioctl };
+
+allow init_t myapp_backend_exec_t:file { execute read open getattr map ioctl execute_no_trans entrypoint };
+allow init_t myapp_backend_t:process { transition dyntransition siginh rlimitinh };
+allow myapp_backend_t myapp_backend_exec_t:file entrypoint;
+type_transition init_t myapp_backend_exec_t:process myapp_backend_t;
 ```
 
 `init_t` (or `systemd`) execs `/opt/myapp/app.py` — a file labelled `myapp_exec_t`. Because the `entrypoint` allow covers this file, and the `type_transition` rule names the target type `myapp_t`, the new process inherits `myapp_t` as its domain. No other file in `/opt/myapp` makes this happen: the rule is *about this path*.
@@ -171,7 +177,7 @@ $ getenforce
 Enforcing
 
 $ ls -Z /usr/bin/passwd
-system_u:object_r:passwd_file_t:s0   /usr/bin/passwd
+system_u:object_r:passwd_exec_t:s0   /usr/bin/passwd
 
 $ ps -eZ | head
 system_u:system_r:unconfined_t:s0  1234 ?  ... /usr/lib/systemd/systemd --system
@@ -179,17 +185,17 @@ system_u:system_r:sshd_t:s0        2345 ?  ... sshd: user@pts/0
 system_u:system_r:unconfined_t:s0  3456 pts/0  ... -bash
 
 $ id -Z
-system_u:system_r:unconfined_r:s0
+unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
 
 $ getfattr -n security.selinux /etc/passwd
 # file: /etc/passwd
 security.selinux="system_u:object_r:passwd_file_t:s0"
 
-$ semanage fcontext -l | head
-# the first fcontext matches: /etc/passwd                system_u:object_r:passwd_file_t:s0
+$ matchpathcon /etc/passwd
+/etc/passwd	system_u:object_r:passwd_file_t:s0
 ```
 
-The third field of `ls -Z /usr/bin/passwd` is `passwd_file_t`. The third field of `ps -eZ | head` is `unconfined_t` (or `sshd_t`). The third field of `getfattr` on `/etc/passwd` is the same `passwd_file_t`. You are now looking at three different views of the same concept: the type.
+The third field of `ls -Z /usr/bin/passwd` is `passwd_exec_t` — the type for the *binary*. The third field of `ls -Z /etc/passwd` is `passwd_file_t` — the type for the *file*. The third field of `ps -eZ | head` is the process domain, `unconfined_t` (or `sshd_t`). Running the same path through `matchpathcon` answers the other direction: *what label should this path carry?* — while `semanage fcontext -l` dumps the whole table, which is a different question. You are now looking at several views of the same concept: the type.
 
 *No host?* That is fine. You do not need one to read the chapter. `make check` reads the golden fixtures and the CLI prints the same three fields for each row; see [Path A](lab.md#path-a) in `book/lab.md`.
 :::

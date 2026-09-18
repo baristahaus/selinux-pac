@@ -88,36 +88,39 @@ The book's hard rule is the two-layer model: the host stays Enforcing, only the 
 | **Whole-system mode** | `getenforce` | **Enforcing** — SSH, cron, systemd, every other domain stay fully protected |
 | **Per-domain log-only list** | `sudo semanage permissive -l` | **`shopapi_t`** (or whatever domain is on the list) — denials log only; the app keeps working |
 
-Every playbook in the repo reads both layers. `enforce.yml` fails when `soak_min_days` is below the production threshold (`line 16–17` of the file — the lab value `soak_min_days: 0` on `rhel-qa` is refused on a host in group `production`). `rollback.yml` switches the domain back to permissive first — stock `semanage`/Ansible module — before any RPM or module change, so the host never flips state.
+The enforce and rollback paths read both layers. `enforce.yml` fails when `soak_min_days` is below the production threshold (`line 16–17` of the file — the lab value `soak_min_days: 0` on `rhel-qa` is refused on a host in group `production`). `rollback.yml` switches the domain back to permissive first — stock `semanage`/Ansible module — before any RPM or module change, so the host never flips state. The soak jobs (`soak_monitor.yml`, `soak_status.yml`) read neither layer: they count events, and a mode they do not check cannot fail their gate.
 
 ## The cost of flipping back
 
-Enforcing-to-permissive is cheap — a single command, no relabel. Permissive-to-enforcing is expensive — a relabel. The book's rule is therefore *a domain rather than the host*: every flip is on the domain, not on the whole system.
+Enforcing-to-permissive is cheap — a single command, no relabel. The way back is cheap too, as long as SELinux was never disabled: a mode flag does not touch a single inode. The expensive transition is the one people confuse with it — disabled to enabled, which relabels the whole filesystem. The book's rule is therefore *a domain rather than the host*: every flip is on the domain, not on the whole system.
 
 | Transition | Cost | Why it matters |
 |---|---|---|
 | **Enforcing → permissive (one domain)** | one `semanage permissive -a` | cheap — no filesystem change |
-| **Permissive (one domain) → enforcing** | relabel of every file in the module's `.fc` list | expensive — `restorecon` rewrites every context, maintenance window |
-| **Enforcing → permissive (whole system, `setenforce 0`) → enforcing** | full filesystem relabel | expensive — same as above, but every file on the host |
-| **Enforcing → disabled** | nothing until re-enable; then full relabel | free until `setenforce 1` returns |
+| **Permissive (one domain) → enforcing** | one `semanage permissive -d`, then `restorecon -Rv` over the application's paths | cheap for the mode; the relabel is for files created while permissive that picked up the wrong type, so `enforce.yml` relabels `install_root`, `var_dir` and `log_dir`, and the runtime dir once the service has restarted |
+| **Enforcing → permissive (whole system, `setenforce 0`) → enforcing** | nothing, both ways | free — `setenforce` moves no labels |
+| **Enforcing → disabled → enforcing** | full filesystem relabel | expensive — a disabled kernel writes no labels at all, so every inode is suspect when it returns (`/.autorelabel`, then a reboot) |
 
 
 
 :::: warn A permissive service is not a healthy service
-A permissive domain lets the application keep running while being denied. A security control that silently does nothing, or a data path that fails intermittently, is common. Do not treat zero HTTP 500s during soak as evidence the policy is correct — the policy may be right about every HTTP path and wrong about every logrotate run. `check_soak_ready.sh` (see `docs/admin/302-PRODUCTION_READINESS.md` §12) gates on **net-new access needs**, not on HTTP 200s.
+A permissive domain lets the application keep running while being denied. A security control that silently does nothing, or a data path that fails intermittently, is common. Do not treat zero HTTP 500s during soak as evidence the policy is correct — the policy may be right about every HTTP path and wrong about every logrotate run. `check_soak_ready.sh` (see `docs/admin/302-PRODUCTION_READINESS.md` §12) gates on the soak window, the event count since the canary marker, and the deploy report — never on HTTP 200s.
 ::::
 
 ## Soak at this level — a domain observed permissive while the pipeline watches for net-new access
 
-Soak is a *single domain* observed permissive, while the pipeline watches for **net-new** access needs — not zero AVC lines, not zero HTTP 500s, but every access the installed policy did not already allow. That is what `docs/admin/302-PRODUCTION_READINESS.md` §3.5 spells out: `soak_monitor.yml` runs daily on the canary group, `net_new_count=0` is the gate, and a failure is a new access need — *not* a repeat denial from cron.
+Soak is a *single domain* observed permissive, while the pipeline watches the policy's blind spot: the access the installed policy does not already allow. `docs/admin/302-PRODUCTION_READINESS.md` §3.5 spells out the daily schedule — `soak_monitor.yml` runs on the canary group and `net_new_count=0` is the gate. The raw count matters too: `monitor_avc.sh` fails when the event count exceeds `soak_max_avc`, and that default is `0`, so a repeat denial from a cron job fails the gate exactly like a new one. `net_new_count` is the number that separates them: a raw AVC the policy already covers is noise, and a net-new one is a promise the policy did not keep.
 
-```bash title="The soak gate, as check_soach_ready.sh prints it"
-$ bash scripts/check_soak_ready.sh \
+```bash title="The soak gate, as check_soak_ready.sh prints it"
+$ sudo bash scripts/check_soak_ready.sh \
     --domain shopapi_t \
-    --marker-file /var/lib/shopapi/selinux_canary_deployed_at
+    --marker-file /var/lib/shopapi/selinux_canary_deployed_at \
+    --report-file /var/lib/shopapi/selinux_deploy_report.json \
+    --manifest config/shopapi.manifest.yml
 
 [INFO] Soak: 8 day(s) elapsed (minimum 7)
-[INFO] AVCs since canary deploy for shopapi_t: 0 (maximum 0)
+[INFO] Events since canary deploy for shopapi_t: 0 (maximum 0)
+[INFO] Deploy report confirms endpoint coverage and domain context
 [INFO] Soak gate passed — safe to enforce shopapi_t
 ```
 :::: warn `soak_min_days: 0` is lab-only
@@ -159,8 +162,8 @@ Nothing here changes state; every command is read-only. If `semanage permissive 
 - **Say which state is worse, and why.** `disabled` is worse than `permissive` because no records exist, and re-enabling triggers a full relabel; on a disabled host, the next incident is decided in minutes instead of days.
 - **Name what each command does at the kernel hook.** `sudo semanage permissive -a` adds a domain to the permissive list — every hook on that domain answers `permissive=1`; `sudo semanage permissive -l` lists every domain currently on the list; `sudo semanage permissive -d` removes a domain — every hook on that domain answers `permissive=0` again.
 - **Read permissive as "this would have broken in Enforcing."** A permissive service looks healthy while guarded operations are denied; zero HTTP 500s during soak is not evidence the policy is correct — the policy may be right about every HTTP path and wrong about every logrotate run.
-- **Name the book's hard rule.** The host stays Enforcing; only the app domain is permissive. Every flip is on the domain, not the host; every flip back is a relabel of the paths in the module's `.fc` list.
-- **Name the soak gate.** Marker age ≥ 7 days; net-new access needs ≤ 0; deploy report signed off — `check_soach_ready.sh` prints the pass line, `enforce.yml` flips the domain back to enforcing, the deploy report records that every endpoint still returned 200.
+- **Name the book's hard rule.** The host stays Enforcing; only the app domain is permissive. Every flip is on the domain, not the host, and a mode flip moves no labels — the relabel belongs to the disabled-to-enabled path.
+- **Name the soak gate.** Marker age ≥ 7 days; events since the marker within `soak_max_avc`; net-new access needs at zero; deploy report signed off — `check_soak_ready.sh` prints the pass line, `enforce.yml` flips the domain back to enforcing, the deploy report records that every endpoint still returned 200.
 - **Name the trap.** `soak_min_days: 0` is lab-only; production inventories refuse it — `enforce.yml` fails on a host in group `production` when the value is below 7.
 - **Read each line of `audit.log`.** The `permissive=` field is the only difference between `permissive=0` and `permissive=1` — the missing rule is the same tuple; the difference is only the flag.
 

@@ -108,10 +108,12 @@ it when the module under review is a dependency of the OS — `httpd_t`, `sshd_t
 `postgresql_t` — and the answer tells you which pattern macros the distribution already reached
 for, and which ones you still need to add.
 
-`seinfo -c` is the structural cousin: it lists every class and its permissions without reading a
-policy binary, useful when you want the class namespace rather than a specific allow. The
-`sepolicy generate` utility is scaffolding, not audit: it writes starter `.te` and `.if` files
-but never commits them — the reviewed `.if` you publish is authored by hand.
+`seinfo -c` is the structural cousin: it lists the object classes the policy defines, and with
+`-x` it prints the permissions of each one. It always reads a policy — the running one, or the
+file named by `--policy` — so its answer describes what the kernel is actually enforcing, not
+what the source tree says. The `sepolicy generate` utility is scaffolding, not audit: it writes
+starter `.te` and `.if` files but never commits them — the reviewed `.if` you publish is authored
+by hand.
 
 When `sepolgen-ifgen` is missing — laptop, CI, air-gapped build — the generator prints a banner
 to stderr and still emits verdicts for everything but base-type allow rules:
@@ -121,19 +123,26 @@ SEPOLGEN INTERFACE MATCHING IS NOT AVAILABLE
 ```
 
 Base-type denies (`var_log_t`, `usr_t`, `etc_t`, any of the generic port types) refuse to
-generate a raw allow against them. That is `VERDICT_TOOLCHAIN`. To force generation in that
-state, the operator passes `--allow-degraded`:
+generate a raw allow against them. That is `VERDICT_TOOLCHAIN`. `--allow-degraded` relaxes that
+refusal — but on a host with no policy loaded at all, the boolean check fails closed first and
+you still see `toolchain_required`, because a generator that cannot ask the policy cannot promise
+the allow is right. Run on this laptop, fixture 09 prints:
 
-```bash
-python3 cli/deterministic_gen.py --explain \
-  --avc-log docs/examples/fixtures/deterministic/09-direct-no-interface/avc.log \
-  --manifest config/myapp.manifest.yml \
-  --allow-degraded
+```text
+[toolchain_required] myapp_t → usr_t:file {getattr open read}
+               Boolean policy check could not run (No readable SELinux policy …).
 ```
 
-`--allow-degraded` tells the generator to emit raw allows on base types anyway, and records
-`engine=degraded` in `findings.json` for reviewers who want a higher-scrutiny banner on those
-allow rules. It is not the default; it is the escape hatch for offline runs.
+That is the honest answer offline, and it is why the golden `interface`, `direct` and `boolean`
+rows come from the fixture runner instead: `scripts/smoke_test.py` mocks the interface lookup and
+the boolean query, so `make test-fixtures` exercises the verdict logic without a policy. What the
+CLI still proves offline is everything that needs no base-policy query — fixture 01 is `fc_drift`
+and exits 0 on this machine, with no SELinux and no sepolgen installed.
+
+`--allow-degraded` is the escape hatch for a host that *has* a policy but no sepolgen: it emits
+the raw allow on a base type and records `engine=degraded` in `findings.json`, so a reviewer sees
+a higher-scrutiny banner on the rule. It is never the default, and it cannot supply the calibration
+the host is missing.
 
 ## House rules
 
@@ -171,10 +180,11 @@ The house rule prefers a relabel over a raw allow against these types.
 | `read_files_pattern` | `read open getattr lock ioctl` |
 | `list_dirs_pattern` | `search read open getattr` |
 
-When a denial carries exactly the permission set a pattern macro consumes, the generator prefers
-the macro call over a raw allow — not as an abstraction, but as review. A reviewer reads
-`manage_files_pattern(myapp_t, myapp_var_lib_t, myapp_var_lib_t)` and sees the same four lines
-the macro expands into, without opening the `.if` first.
+When a denial carries at least the permission set a pattern macro consumes, the generator prefers
+the macro call over a raw allow — not as an abstraction, but as review. The test is
+`required <= observed`, so a denial carrying extras still collapses and the extras do not appear
+in the rendered allow. A reviewer reads `manage_files_pattern(myapp_t, myapp_var_lib_t,
+myapp_var_lib_t)` and sees the permission set the macro stands for, without opening the `.if`.
 
 ### Permissions that weaken the domain
 
@@ -222,9 +232,9 @@ avc: denied { search } for pid=1234 comm="python3" name="log" path="/var/log"
 
 `var_log_t` is not module-private, but it is a generic file type the generator already knows how
 to reach for. The mock sepolgen reports `behavior: "match"`, and the generator emits
-`list_dirs_pattern(myapp_t)` — the `list_dirs_pattern` macro, which consumes exactly the
-permissions observed in the AVC (`search read open getattr`) against the target. The expected
-verdict is `interface` with target `var_log_t`:
+`list_dirs_pattern(myapp_t)` — the macro whose permission set (`search read open getattr`)
+*contains* the one permission this AVC observed. The expected verdict is `interface` with target
+`var_log_t`:
 
 ```json
 [
@@ -252,12 +262,13 @@ avc: denied { read open getattr } for pid=1234 comm="python3" name="notes.txt"
   tclass=file permissive=1
 ```
 
-`usr_t` is generic — the house rule would prefer an `fc_fix` or `fc_drift` and a relabel. But
-the manifest names `/usr/share/myapp` as an owned path, and the `.fc` already matches. The
-sepolgen mock reports `behavior: "no_match"` — no refpolicy macro reaches for `usr_t` against
-`file` with the observed permission set. With no interface match, no base-type deny blocks the
-generation (the operator would pass `--allow-degraded`), and the generator classifies the verdict
-as `direct`. The expected verdict is `direct` with target `usr_t`:
+`usr_t` is generic — the house rule would prefer an `fc_fix` or `fc_drift` and a relabel. It
+cannot reach for one here: the manifest owns `/opt/myapp`, `/var/lib/myapp`, `/var/log/myapp`,
+`/run/myapp` and `/var/opt/myapp`, and nothing under `/usr/share`, so no root matches this path
+and no `.fc` line is suggested for it. The sepolgen mock reports `behavior: "no_match"` — no
+refpolicy macro reaches for `usr_t` against `file` with the observed permission set. With no
+interface match, nothing blocks the generation from the classifier's point of view, and the
+verdict is `direct`:
 
 ```json
 [
@@ -290,25 +301,27 @@ Two commands, zero state change:
 
 ```bash
 # (rhel-qa or any host with policycoreutils-devel installed)
-sudo sepolgen-ifgen
+$ sudo sepolgen-ifgen
 
-+# then, on the same host, query refpolicy for an allow
-sesearch --allow --source payments_t --target payments_var_lib_t --class dir --perm search
+# then, on the same host, query refpolicy for an allow
+$ sesearch --allow --source payments_t --target payments_var_lib_t --class dir --perm search
 ```
 
-Offline laptop: skip the live sepolgen, run the generator against the two fixtures with
-`--allow-degraded` and `--explain`:
+Offline laptop: run the generator against the fixtures that need no base-policy query. One
+fixture per run, and `--avc-log` and `--manifest` are required:
 
 ```bash
-python3 cli/deterministic_gen.py --explain \
- --allow-degraded
-
-python3 cli/deterministic_gen.py --explain \
- --allow-degraded
+$ python3 cli/deterministic_gen.py --explain \
+    --avc-log docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
+    --manifest config/myapp.manifest.yml \
+    --existing-te selinux/myapp.te \
+    --existing-fc selinux/myapp.fc
 ```
 
-Both runs print each finding's verdict, each `expected.json` row, and each degraded banner; the
-exit codes (1 when blockers remain, 0 otherwise) are the same guarantees the CI uses.
+That one prints `[fc_drift]` and exits 0. The interface-matching fixtures need a host with a
+policy and sepolgen: without them the boolean check fails closed first and the run prints
+`[toolchain_required]` and exits 1, whatever you pass. `make test-fixtures` covers both paths
+by mocking the interface lookup, and that is the run CI uses.
 
 ::::
 

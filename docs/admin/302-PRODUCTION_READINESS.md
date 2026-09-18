@@ -402,7 +402,7 @@ $ bash scripts/check_soak_ready.sh \
     --marker-file /var/lib/myapp/selinux_canary_deployed_at
 
 [INFO] Soak: 1 day(s) elapsed (minimum 7)
-[INFO] AVCs since canary deploy for myapp_t: 0 (maximum 0)
+[INFO] Events since canary deploy for myapp_t: 0 (maximum 0)
 [ERROR] Soak period not met — wait 6 more day(s) or use force_enforce=true (break-glass only)
 ```
 
@@ -410,8 +410,8 @@ $ bash scripts/check_soak_ready.sh \
 
 ```bash
 [INFO] Soak: 10 day(s) elapsed (minimum 7)
-[INFO] AVCs since canary deploy for myapp_t: 2 (maximum 0)
-[ERROR] Too many AVC denials since canary deploy (2 > 0)
+[INFO] Events since canary deploy for myapp_t: 2 (maximum 0)
+[ERROR] Too many SELinux events since canary deploy (2 > 0)
 ```
 
 **PASS — after 8 days, zero AVCs:**
@@ -422,7 +422,7 @@ $ bash scripts/check_soak_ready.sh \
     --marker-file /var/lib/myapp/selinux_canary_deployed_at
 
 [INFO] Soak: 8 day(s) elapsed (minimum 7)
-[INFO] AVCs since canary deploy for myapp_t: 0 (maximum 0)
+[INFO] Events since canary deploy for myapp_t: 0 (maximum 0)
 [INFO] Soak gate passed — safe to enforce myapp_t
 ```
 

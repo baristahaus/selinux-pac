@@ -22,10 +22,20 @@ avc:  denied  { name_bind } for  pid=1234 comm="python3" src=8888
   tclass=tcp_socket permissive=1
 ```
 
-That AVC is the same tuple from the deterministic fixture under `docs/examples/fixtures/deterministic/02-port-bind/`. The generator classifies it as:
+That AVC is the same tuple as the deterministic fixture under `docs/examples/fixtures/deterministic/02-port-bind/`. The generator classifies it like this:
+
+```text
+[private_port] myapp_t → unreserved_port_t:tcp_socket {name_bind}
+               Use private port type myapp_port_t and semanage port — not unreserved_port_t.
+               → allow myapp_t myapp_port_t:tcp_socket name_bind;
+```
+
+The same verdict is a row in `policy_out/findings.json`, with the manifest entry the fix needs:
 
 ```json
-{"verdict": "private_port", "tgt": "unreserved_port_t", "next_action": "add_manifest_port", "port": 8888}
+{"verdict": "private_port", "tgt": "unreserved_port_t", "port": 8888,
+ "next_action": "add_manifest_port",
+ "selinux_ports_snippet": {"port": 8888, "proto": "tcp", "type": "myapp_port_t"}}
 ```
 
 The fix is not a rule. It is a port assignment.
@@ -96,16 +106,27 @@ The capability is a different decision from the label. A private port type lets 
 
 ## Booleans
 
-A boolean is a host-level flag that stands in for a rule. `setsebool -P myapp_t 1` turns the flag on permanently across reboots — `-P` is the difference between a hot fix and a policy decision.
+A boolean is a host-level flag that stands in for a rule. `setsebool -P <boolean> on` turns the flag on and writes it into the policy store — `-P` is the difference between a hot fix and a policy decision:
 
-Every boolean starts its life in `semanage boolean -l`, and the administrator reads them with `getsebool -a`. The command prints every boolean on the host, each line carrying a name, a human description, and the current state. Production inventory starts there.
+```bash
+$ setsebool -P httpd_can_network_connect on
+```
+
+Every boolean already exists in the base policy. `getsebool -a` prints every one of them and the state it is in *right now*:
 
 ```bash
 $ getsebool -a | head
-abrt_anon_write (off)  ->  off
-httpd_can_network_connect_db (off)  ->  off
-httpd_can_network_connect (off)  ->  off
+abrt_anon_write --> off
+httpd_can_network_connect --> off
+httpd_can_network_connect_db --> off
 …
+```
+
+`getsebool` prints the name and the state, nothing else. The human-readable description lives in `semanage boolean -l`, which is the inventory command — and the command `cli/boolean_hints.py` parses when it lists the booleans a denial could be answered by:
+
+```bash
+$ semanage boolean -l | grep httpd_can_network_connect
+httpd_can_network_connect        (off  ,  off)  Allow httpd to connect to the network
 ```
 
 The decision rule is simple. A boolean is right when the access is a policy choice the administrator owns. A boolean is wrong when it just hides a missing rule.
@@ -129,19 +150,27 @@ hints:
       perms: [name_connect]
 ```
 
-The `match` block is what the tool matches against: the target type, the class, the permissions. When the AVC carries those three values, the override wins before the query. When neither the override nor the query can run, generation refuses a silent direct allow. That is the same contract as Chapter 204 — the host command is the final answer, not the `.te`.
+The `match` block is what the tool matches against: the target type, the class, the permissions. When the AVC carries those three values, the override wins before the query. When neither the override nor the query can run, generation refuses a silent direct allow — the same contract `docs/developers/204-DETERMINISTIC_POLICY.md` states: the host command is the final answer, not the `.te`.
 
-The two boolean fixtures report identical verdicts against `http_port_t` and `httpd_can_network_connect`.
+Two fixtures report the same boolean verdict, through one path each.
+
+`04-boolean-network-connect` resolves through the policy query: its local `boolean_hints.yml` is `hints: []`, and `boolean_mock.json` stands in for `sesearch` on a CI host with no policy loaded.
+
+`10-boolean-hint` resolves through the curated override in `config/boolean_hints.yml`, offline, with no policy query at all.
+
+Both `expected.json` files are arrays of rows, and both rows are `http_port_t` + `httpd_can_network_connect`:
 
 ```json
-// docs/examples/fixtures/deterministic/04-boolean-network-connect/expected.json
-{"verdict": "boolean", "tgt": "http_port_t", "boolean": "httpd_can_network_connect"}
-
-// docs/examples/fixtures/deterministic/10-boolean-hint/expected.json
-{"verdict": "boolean", "tgt": "http_port_t", "boolean": "httpd_can_network_connect"}
+[
+  {
+    "verdict": "boolean",
+    "tgt": "http_port_t",
+    "boolean": "httpd_can_network_connect"
+  }
+]
 ```
 
-Both denials in the fixtures are `name_connect` against `http_port_t` from `myapp_t`. The override matches, the policy query matches, the verdict is `boolean`. The host command is `setsebool httpd_can_network_connect on` — and it is not a rule, it is a policy choice the operator takes.
+Both denials in the fixtures are `name_connect` against `http_port_t` from `myapp_t`. Different mechanism, same verdict, and the answer the generator writes in both cases is a host command: the summary line says `setsebool -P httpd_can_network_connect on`, and it is not a rule — it is a policy choice the operator takes.
 
 ## Transitions
 
@@ -191,7 +220,14 @@ $ getsebool -a | head
 Then read the ports block in the manifest.
 
 ```bash
-$ head -30 config/myapp.manifest.yml | grep -A 10 selinux_ports
+$ grep -A 8 '^selinux_ports:' config/myapp.manifest.yml
+selinux_ports:
+  - port: 8888
+    proto: tcp
+    type: myapp_port_t
+  - port: 8889
+    proto: tcp
+    type: myapp_backend_port_t
 ```
 
 Offline, against the deterministic generator with the real flags from `cli/deterministic_gen.py`. The invocation reads the file:
@@ -204,7 +240,7 @@ python3 cli/deterministic_gen.py --explain \
   --existing-fc selinux/myapp.fc
 ```
 
-Run it. The output for `02-port-bind` is the same `private_port` verdict you just read. Run it again for `04-boolean-network-connect` — you will see the same boolean verdict, same override, same `httpd_can_network_connect`. The generator does not choose the answer; it writes the same answer you would write.
+Run it. The output for `02-port-bind` is the same `private_port` verdict you just read. Run it again for `04-boolean-network-connect` and you get the same boolean verdict and the same `httpd_can_network_connect` summary line — the generator does not choose the answer, it writes the same answer you would write.
 
 ## What you can do now
 

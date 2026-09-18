@@ -26,26 +26,29 @@ If every process is one domain, you have a clean blast radius. The same domain, 
 
 There are exactly two patterns the repository uses to start a process under its custom domain. Both are shown in `selinux/shopapi/`, and each answers a different reality about how binaries are shipped.
 
-### (a) systemd `SELinuxContext=` on a shared binary
+### (a) systemd `SELinuxContext=` sets the domain at exec
 
-The systemd unit carries the label directly:
+The unit names the domain systemd applies when it execs the process:
 
 ```bash
-$ systemctl cat shopapi.service | grep SELinuxContext
+$ systemctl show shopapi.service -p SELinuxContext
 SELinuxContext=system_u:system_r:shopapi_t:s0
 ```
 
-`shopapi.service` sets `SELinuxContext=system_u:system_r:shopapi_t:s0` because the JVM launcher is `bin_t` — a shared binary every host trusts, and therefore every host unconfined. Under enforcing, that binary would refuse to exec into a label. systemd is the only way to force the transition without a wrapper.
+`SELinuxContext=` sets the label; it does not make the binary executable. The domain you name still needs `execute` on its entrypoint, which is why the demo never runs `/usr/bin/java`. `demo/shopapi/shopapi.service` runs `/opt/shopapi/bin/java`, a private copy of the JRE launcher that `scripts/lib/demo_estate.sh` installs under the application's own root, and `selinux/shopapi/shopapi.fc` labels that path `shopapi_exec_t`. Running the shared `/usr/bin/java` instead would be `bin_t`: a type the forbidden-pattern gate refuses to let a domain execute, and a `203/EXEC` under enforcing when no allow covers it.
 
-This pattern is appropriate whenever the binary is `bin_t` or `java_exec_t` from the base policy and you need it to run under a custom domain. The review cost is narrow: you sign off that systemd is allowed to exec the entrypoint, and the policy covers the runtime.
+The pattern is appropriate when the application owns its install root and you want the domain fixed at start time rather than inferred at exec. The review cost is narrow: you sign off the `SELinuxContext=` line and the file context of the entrypoint it runs.
 
-### (b) a labelled wrapper with `type_transition`
+### (b) a labelled entrypoint with `type_transition`
 
-The alternative is to place a new label on the binary itself. The shopapi template does not take this path in the first PR — the header of `selinux/shopapi/shopapi.te` lists it explicitly:
+The second pattern puts the label on the binary and lets the kernel move the process into the domain on exec. The shopapi module ships both halves:
 
-> *Live start: systemd `SELinuxContext=system_u:system_r:shopapi_t:s0` (java is a shared `bin_t`/`java_exec_t` binary). Alternative: labelled wrapper at the app `install_root` labeled `shopapi_exec_t` + `type_transition`.*
+- `selinux/shopapi/shopapi.fc` maps the install root, `/opt/shopapi(/.*)?`, to `shopapi_exec_t`;
+- `selinux/shopapi/shopapi.te` calls `init_daemon_domain(shopapi_t, shopapi_exec_t)`, which declares the entrypoint and the transition out of the init domain.
 
-The wrapper pattern is appropriate when you can relabel the binary at the install root — for example, when the binary is delivered into your own path under `/opt/shopapi/bin/java` and you own the file contexts. The review cost is the same narrow one: you sign off the file context declaration, and `type_transition` is covered in §3 below.
+The demo uses both patterns at once, and the comment in the unit says so: the private launcher is labeled `shopapi_exec_t` so `shopapi_t` may exec it at all, and `SELinuxContext=` then sets the domain without waiting for the transition. The module header calls the labelled entrypoint the *alternative* to `SELinuxContext=` while the `.fc` and `.te` implement it — read the files, not the header.
+
+The review cost is the same narrow one: you sign off the file context declaration and the `type_transition` line.
 
 ## Why the exec type matters
 
@@ -57,27 +60,22 @@ if grep -qE 'allow\s+\w+\s+bin_t:file[[:space:]]+\{[^}]*execute' "${te}"; then
 fi
 ```
 
-A `bin_t` file is a world-writable, world-executable binary that every host trusts. Granting a domain `allow shopapi_t bin_t:file execute` lets that domain exec *every* binary on the box, including `/usr/sbin/useradd` or `/usr/libexec/platform-python`. That is exactly why the rule is forbidden: every application needs its own `exec_t` type declared in the `.fc` file, so `allow shopapi_t shopapi_exec_t:file execute` is legible and scoped.
+`bin_t` is the type of the system's own binaries — `/usr/bin`, `/usr/sbin`, `/usr/libexec` — mode `0755`, so world-readable and world-executable, and reachable by nearly every domain on the box. Granting a domain `allow shopapi_t bin_t:file execute` lets that domain exec *every* system binary, from `/usr/sbin/useradd` to `/usr/libexec/platform-python`. That breadth is why the rule is forbidden: every application gets its own `exec_t` declared in the `.fc` file, so `allow shopapi_t shopapi_exec_t:file execute` is legible and scoped.
 
-That is why each start option above exists. You either:
-
-1. force the transition from `init_t` via `SELinuxContext=` in systemd, accepting that `init_t` already trusts the `bin_t` exec, or
-2. relabel the binary with a dedicated `exec_t`, letting `type_transition` from `init_t` do the work cleanly.
-
-In practice the first answer is cheaper for JVMs because nobody wants to relabel the JRE launcher on every host.
+That is why both start options above end in the same place — an entrypoint the application owns. For a JVM the demo gets there by installing its own launcher: `scripts/lib/demo_estate.sh` copies `/usr/bin/java` into the app root, because a system-wide relabel of the shared launcher is exactly what the gate refuses. With a labelled entrypoint in place you can either let `type_transition` from `init_t` move the process, which is what `init_daemon_domain` wires, or set the domain explicitly with `SELinuxContext=`. The demo does both.
 
 ## Entry points and the helpers you already know
 
 Every daemon module starts with a pair of macros. They look small, but they each stand for a block of review.
 
-| Macro | Purpose | What it expands to |
-|-------|---------|--------------------|
-| `init_daemon_domain(domain, exec_type)` | declare baseline allows for a daemon process starting from a file of the given exec type | `allow init_t <exec_type>:file { execute read open getattr map ioctl execute_no_trans entrypoint }; allow <domain> <exec_type>:file entrypoint; type_transition init_t <exec_type>:process <domain>;` — and baseline macros such as `files_read_etc_files(<domain>)` |
-| `init_daemon_run_dir(run_type, "name")` | declare a runtime directory owned by the domain | `allow init_t <run_type>:dir { search getattr }; allow <domain> <run_type>:dir { add_name remove_name write search getattr open read }; files_pid_file(<run_type>)` |
+| Macro | Purpose | What it does, and what it does not |
+|-------|---------|------------------------------------|
+| `init_daemon_domain(domain, exec_type)` | declare the daemon domain, its entrypoint, and the transition from the init domain through that entrypoint | declares the domain/entrypoint relationship and the transition out of the init domain. It does **not** write the daemon's runtime baseline: `files_read_etc_files(<domain>)`, `sysnet_read_config(<domain>)` and the rest are separate lines, which `selinux/myapp.te` collects under its own *Daemon baseline* heading |
+| `init_daemon_run_dir(run_type, "name")` | declare the runtime directory the init domain creates for the service | declares the type as the `/run/<name>` home. It does **not** call `files_pid_file()` — both modules declare that themselves (`selinux/myapp.te` line 22, `selinux/shopapi/shopapi.te` line 26) — and the domain's own `dir { add_name remove_name write … }` access is written where it is needed |
 
-`init_daemon_domain` is the entry-point. It declares the relationship between `init_t` (systemd) and the exec file, the domain and the exec file, and `type_transition` from `init_t` into the domain. `init_daemon_run_dir` is the runtime home: systemd creates `/run/<name>`, the domain owns it, the pid file lives there. Each macro is a block of allow and each block must be reviewed as one unit; do not widen one AVC at a time.
+`init_daemon_domain` is the entry-point and the transition in one line. `init_daemon_run_dir` is the runtime home: systemd creates `/run/<name>`, and the policy knows the type. Both come from the base policy and change with its version, so when a module needs a permission a macro does not emit, the module says so explicitly rather than assuming. Each macro is a block of review; do not widen one AVC at a time.
 
-The `require` block in `selinux/myapp.te` is the mechanical glue that lets these macros work:
+Where `selinux/myapp.te` also writes the init-domain side by hand, it declares what that needs:
 
 ```text
 require {
@@ -87,7 +85,7 @@ require {
 }
 ```
 
-Every module that uses `init_daemon_domain` or `type_transition` against `init_t` needs this block. It names the types, classes and permissions that the macros will reach for.
+It does that because the module starts **user units on FCOS**, where systemd runs as `init_t` — the comment above those rules says so, and the raw `allow init_t myapp_exec_t:file { … entrypoint }` and `type_transition init_t myapp_exec_t:process myapp_t` follow it. Modules that rely on the macro alone carry no such block: `selinux/shopapi/shopapi.te` and `selinux/payments/payments.te` declare neither `init_t` nor a `require` section.
 
 ## Two processes, one application
 
@@ -104,13 +102,13 @@ Each domain gets its own `exec_t` (`myapp_exec_t`, `myapp_backend_exec_t`), each
 allow myapp_t myapp_backend_t:unix_stream_socket connectto;
 ```
 
-The Flask process (`myapp_t`) initiates connections into the backend, but the backend cannot reach back into `myapp_t` — that asymmetry is intentional. Each domain has a different privilege profile: `myapp_t` opens HTTP on `myapp_port_t`; `myapp_backend_t` opens its own listener on `myapp_backend_port_t`. Each owns its own runtime dir; each can write its own log files; each has its own baseline allows.
+The Flask process (`myapp_t`) initiates connections into the backend, but the backend cannot reach back into `myapp_t` — that asymmetry is intentional. Each domain has its own exec type, its own entrypoint, its own port and its own baseline allows: `myapp_t` opens HTTP on `myapp_port_t`; `myapp_backend_t` opens its own listener on `myapp_backend_port_t`. What they share is real too — one runtime directory, declared once by `init_daemon_run_dir(myapp_var_run_t, "myapp")`, and one log type. `myapp_backend_t` has no log type and no log allow of its own. The split buys a smaller blast radius on the backend, not a second file tree.
 
 This split is worth it when the backend has a different privilege profile — when it opens a listener, talks to a database, or has an independent lifecycle. The rule volume is the cost: you get twice the allow list and twice the review signatures. The isolation is the benefit: compromise of the frontend does not automatically compromise the backend.
 
 ## systemd hardening and policy surface
 
-A systemd unit already hardens the process before SELinux sees it. `selinux/shopapi/shopapi.service` ships with:
+A systemd unit already hardens the process before SELinux sees it. `demo/shopapi/shopapi.service` ships with:
 
 ```text
 NoNewPrivileges=false
@@ -119,9 +117,9 @@ LogsDirectory=shopapi
 RuntimeDirectory=shopapi
 ```
 
-`StateDirectory` and `LogsDirectory` translate directly into `shopapi_var_lib_t` and `shopapi_log_t` on disk, each owned by the domain. `RuntimeDirectory=shopapi` translates into `shopapi_var_run_t`. Each of these is the reason the policy has the permissive path to the file; each is the reason the policy names the type.
+`StateDirectory=shopapi`, `LogsDirectory=shopapi` and `RuntimeDirectory=shopapi` are the three paths the manifest names as `var_dir`, `log_dir` and `runtime_dir`, and the three paths `selinux/shopapi/shopapi.fc` labels `shopapi_var_lib_t`, `shopapi_log_t` and `shopapi_var_run_t`. The unit creates the directories; the `.fc` gives them their types; the module's allows decide what the domain may do inside them.
 
-Hardening that removes access reduces the policy surface. Read the unit before writing allows. If the unit says `PrivateTmp` and the app writes state under `/tmp`, your allows will need a broader file class than you expected. If the unit says `NoNewPrivileges` and the process needs `execmem`, your baseline already refuses.
+Hardening that removes access reduces the policy surface. Read the unit before writing allows. If the unit sets `PrivateTmp` and the app writes state under `/tmp`, your allows will need a broader file class than you expected. If the unit sets `NoNewPrivileges=true`, the kernel refuses the SELinux `type_transition` from `init_t` into your domain on RHEL and the process stays in the init domain — which is why the shipped unit keeps it `NoNewPrivileges=false` for a labelled daemon. An app that needs `execmem` is a separate security decision: the generator routes it to `needs_review` rather than writing an allow (`docs/examples/fixtures/deterministic/12-execmem-review/`).
 
 ::: why Always read the unit
 The unit tells the policy what paths exist and what access the process already lost. You write `allow` only for the access the hardening did not remove. Every rule you add that the unit would already grant is extra review.
@@ -137,7 +135,7 @@ flowchart TD
   start --> read_unit["reads the unit file: SELinuxContext, ExecStart, paths"]
   read_unit --> exec["exec's /opt/shopapi/bin/java"]
   exec --> transition["type_transition init_t shopapi_exec_t → shopapi_t"]
-  transition --> entrypoint["myapp_t invokes shopapi_exec_t via entrypoint"]
+  transition --> entrypoint["entrypoint on shopapi_exec_t: init_t may exec it"]
   entrypoint --> runtime["runtime dir /run/shopapi owned by shopapi_t"]
   runtime --> bind["binds shopapi_port_t on TCP"]
   bind --> serve["serves HTTP"]
@@ -166,16 +164,16 @@ Each start option has a mechanism, a trigger, and a review cost.
 
 | Start option | Mechanism | When to use | What it requires | Review cost |
 |-------------|-----------|-------------|------------------|-------------|
-| `SELinuxContext=` in systemd | systemd forces the label on exec | shared `bin_t`/`java_exec_t` binaries | no `.fc` change on the binary | sign off `init_t` entrypoint allows only |
-| labelled wrapper + `type_transition` | `.fc` relabels the binary; the policy `type_transition` from `init_t` | own path under `/opt`, JRE or wrapper you control | file context declaration for the new type, plus `restorecon` step | sign off the file type declaration and `type_transition` line |
-| no domain, `unconfined_t` | nothing — the JVM stays unconfined | first install before the module lands | none | none, but compromise is a compromise |
+| `SELinuxContext=` in systemd | systemd sets the label at exec | you own the install root and want the domain fixed at start time | a labelled entrypoint the domain may exec: `.fc` line plus `restorecon` | sign off the unit line and the entrypoint's file context |
+| labelled entrypoint + `type_transition` | `.fc` labels the binary; the policy transitions from `init_t` | the same entrypoint, but you want the kernel to derive the domain | the same file context declaration, plus `init_daemon_domain` | sign off the file type declaration and the transition |
+| no domain, `unconfined_t` | nothing — the JVM stays unconfined | first install, before the module lands | none | none, but compromise is a compromise |
 
-The repo prefers the systemd option for the JVM because nobody wants to relabel the JRE launcher. The alternative stays available and is documented in the template header.
+The demo uses both at once, and that is the honest reading of `selinux/shopapi/` and `demo/shopapi/shopapi.service`: the label on the entrypoint is what makes the exec legal, and `SELinuxContext=` is what makes the domain deterministic at start time.
 
 ## What you can do now
 
 - decide the boundary: each long-running component with a different privilege profile gets its own domain
-- pick the start option: `SELinuxContext=` for shared binaries, labelled wrapper for your own paths
+- pick the start option: a labelled entrypoint is required either way; `SELinuxContext=` fixes the domain at start time, `type_transition` derives it at exec
 - use `init_daemon_domain` and `init_daemon_run_dir` as the two entry-point blocks that stand for the review
 - read the systemd unit before writing allows — hardening removes access, the policy only covers what the unit kept
 - verify the unit with `systemctl show <unit> -p SELinuxContext`, `systemctl cat <unit>` and `ls -Z /opt/<app>/bin/<launcher>`

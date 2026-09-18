@@ -14,6 +14,7 @@
       try {
         localStorage.setItem("book-theme", next);
       } catch (e) {}
+      if (mermaidReady) renderDiagrams();
     });
   }
 
@@ -243,21 +244,52 @@
   }
 
   /* diagrams --------------------------------------------------------- */
-  if (document.querySelector(".mermaid")) {
+  var mermaidReady = false;
+
+  function diagramNodes() {
+    return Array.prototype.slice.call(document.querySelectorAll(".mermaid"));
+  }
+
+  /* remember the markdown source once, so a theme change can re-render */
+  function collectDiagramSources() {
+    diagramNodes().forEach(function (node) {
+      if (!node.dataset.src) node.dataset.src = node.textContent;
+    });
+  }
+
+  function renderDiagrams() {
+    if (!window.mermaid) return;
+    collectDiagramSources();
+    var nodes = diagramNodes();
+    nodes.forEach(function (node) {
+      node.textContent = node.dataset.src || "";
+      node.removeAttribute("data-processed");
+    });
+    window.mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: doc.dataset.theme === "ink" ? "dark" : "neutral",
+      themeVariables: { fontSize: "15px" },
+      flowchart: { useMaxWidth: false, htmlLabels: true },
+      sequence: { useMaxWidth: false }
+    });
+    window.mermaid.run({ nodes: nodes });
+  }
+
+  var mermaidNodes = diagramNodes();
+  if (mermaidNodes.length) {
     var mermaidScript = document.createElement("script");
     mermaidScript.src = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js";
     mermaidScript.async = true;
     mermaidScript.onload = function () {
-      if (!window.mermaid) return;
-      window.mermaid.initialize({
-        startOnLoad: false,
-        securityLevel: "strict",
-        theme: doc.dataset.theme === "ink" ? "dark" : "neutral",
-        themeVariables: { fontSize: "15px" },
-        flowchart: { useMaxWidth: false, htmlLabels: true },
-        sequence: { useMaxWidth: false }
+      mermaidReady = true;
+      renderDiagrams();
+    };
+    /* air-gapped host: leave the diagram source readable and say why */
+    mermaidScript.onerror = function () {
+      mermaidNodes.forEach(function (node) {
+        node.classList.add("mermaid-offline");
       });
-      window.mermaid.run({ querySelector: ".mermaid" });
     };
     document.head.appendChild(mermaidScript);
   }

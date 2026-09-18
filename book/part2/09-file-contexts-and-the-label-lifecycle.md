@@ -164,14 +164,14 @@ $ sudo semanage fcontext -l
 $ sudo semanage fcontext -d '/var/lib/myapp(/.*)?'
 
 # equivalence: keep the type but add another root
-$ sudo semanage fcontext -e '/var/lib/myapp(/.*)?' '/var/opt/myapp(/.*)?'
+$ sudo semanage fcontext -a -e /var/lib/myapp /var/opt/myapp
 ```
 
-`-a` adds an entry, `-l` lists, `-d` deletes, `-e` redirects an existing entry
-to another pattern while preserving the type. The equivalence switch is the
-answer to the `/opt/myapp` / `/var/opt/myapp` question: one type, two roots,
-no extra rule — `semanage fcontext -e` points the second root at the same
-type.
+`-a` adds an entry, `-l` lists, `-d` deletes. `-e` is an *argument of an action*, not an action
+of its own: `semanage fcontext -a -e <target> <path>` adds a new entry that reuses an existing
+entry's type. It takes path prefixes, not regexes, so `/var/lib/myapp(/.*)?` is not a valid
+argument — you pass the directory. The equivalence switch is the answer to the `/var/lib/myapp` /
+`/var/opt/myapp` question: one type, two roots, no second `.fc` line.
 
 ## Drift — what it is and why it is invisible
 
@@ -205,9 +205,13 @@ The fix is `restorecon` — but the fix that actually ships is `restorecon` as
 the last step of deploy. The rule is *label before start*:
 
 ```bash
-# RPM %post or Ansible role runs after semodule -i and before the unit starts
-$ sudo restorecon -Rv /var/lib/myapp /var/log/myapp /run/myapp /opt/myapp
+# RPM %post or Ansible role runs after semodule -i, before the unit starts
+$ sudo restorecon -Rv /opt/myapp /var/lib/myapp /var/log/myapp
 $ sudo systemctl start myapp.service
+
+# the runtime directory does not exist until the service creates it,
+# so its relabel comes after the restart
+$ sudo restorecon -Rv /run/myapp
 ```
 
 The canary phase ([`scripts/dev_generate_policy.sh`](../../scripts/dev_generate_policy.sh))
@@ -238,13 +242,18 @@ everything under `/var/lib/myapp` as `myapp_var_lib_t`; the file on disk is
 still `var_lib_t`. The generator's verdict is
 
 ```json
-{"verdict": "fc_drift", "tgt": "var_lib_t"}
+[
+  {
+    "verdict": "fc_drift",
+    "tgt": "var_lib_t"
+  }
+]
 ```
 
 quoted exactly from [`expected.json`](../../docs/examples/fixtures/deterministic/01-mislabeled-var-lib/expected.json).
-The fix is `restorecon`. A new `.fc` line would be redundant.
+The generator's action line is the whole fix: *`/var/lib/myapp/data.log` should already be `myapp_var_lib_t` per the `.fc`, but is labeled `var_lib_t` on disk. No policy change needed — run `restorecon -Rv /var/lib/myapp/data.log`.* A new `.fc` line would be redundant.
 
-**Case `06-fc-missing-line`** — the policy never named the install root.
+**Case `06-fc-missing-line`** — no `.fc` line matches the path.
 
 ```text
 avc: denied { write } for pid=1234 comm="python3" name="data"
@@ -254,18 +263,25 @@ avc: denied { write } for pid=1234 comm="python3" name="data"
   tclass=file permissive=1
 ```
 
-The path is `/opt/myapp/cache/data`. The manifest's `install_root` is
-`/opt/myapp`, but `selinux/myapp.fc` never wrote a regex for it. The file on
-disk is `var_lib_t`; the rule covers `var_lib_t` but the type the policy
-expects for the install root was never declared. The verdict is
+The path is `/opt/myapp/cache/data`, under the manifest's `install_root` of `/opt/myapp`.
+`selinux/myapp.fc` names the root itself and several files inside it, but no line matches a new
+subdirectory — so the file took the type its parent directory carried, `var_lib_t`. The verdict is
 
 ```json
-{"verdict": "fc_fix", "tgt": "var_lib_t"}
+[
+  {
+    "verdict": "fc_fix",
+    "tgt": "var_lib_t"
+  }
+]
 ```
 
 quoted exactly from [`expected.json`](../../docs/examples/fixtures/deterministic/06-fc-missing-line/expected.json).
-The fix is a new `.fc` line for the install root — `/opt/myapp(/.*)?` —
-followed by `restorecon`.
+The suggested line is the observed path, typed from the install root, and `restorecon` applies it:
+
+```text
+→ /opt/myapp/cache/data    gen_context(system_u:object_r:myapp_exec_t,s0)
+```
 These two verdicts are the two states of `.fc` failure: `fc_drift` (a line
 already exists, relabel the box), and `fc_fix` (a line is missing, add it
 and relabel).
@@ -280,15 +296,17 @@ Reading the fixtures is what you do on your laptop.
 $ matchpathcon /var/lib/myapp/data.log
 /var/lib/myapp/data.log    system_u:object_r:myapp_var_lib_t:s0
 
-$ sudo restorecon -Rv -n /var/lib/myapp /var/log/myapp /run/myapp /opt/myapp
+$ sudo restorecon -Rv -n /opt/myapp /var/lib/myapp /var/log/myapp
 
 # on your laptop: read each fixture and match its verdict
 $ cat docs/examples/fixtures/deterministic/01-mislabeled-var-lib/expected.json
 $ cat docs/examples/fixtures/deterministic/06-fc-missing-line/expected.json
 ```
 
-The dry run must show no changes before restart. If it shows changes, run
-`restorecon -Rv` and restart.
+The dry run is a read — `-n` prints what *would* change and writes nothing. It must show no
+changes before restart; if it shows any, run `restorecon -Rv` without `-n`. The pipeline leaves
+`/run/myapp` out of the pre-start dry run for the same reason it relabels it later: the directory
+does not exist until the service starts.
 Each fixture you read should match its own verdict — `fc_drift` is a redundant line, relabel; `fc_fix` is a missing line, add and relabel. The two states of `.fc` failure are the two states you will see in every package install.
 
 :::
@@ -300,7 +318,7 @@ Each fixture you read should match its own verdict — `fc_drift` is a redundant
   *new* files, not *old* ones.
 - Run the read (`matchpathcon`) and the write (`restorecon -Rv`); know the dry
   run (`-n`) and the rule that restarts after the dry run is clean.
-- Keep two roots pointing at the same type with `semanage fcontext -e`.
+- Keep two roots pointing at the same type with `semanage fcontext -a -e`.
 - Name the two states of drift: `fc_drift` is a redundant line, relabel;
   `fc_fix` is a missing line, add and relabel.
 - Put `restorecon` at the end of deploy, before the unit starts.
