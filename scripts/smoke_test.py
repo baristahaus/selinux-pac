@@ -1892,6 +1892,76 @@ def test_force_reason_recorded() -> None:
         assert "<!-- AUTO:VENDOR_OVERRIDE -->" not in body
 
 
+def _load_book_builder():
+    """Import tools/book/build.py by path (it is not a package)."""
+    import importlib.util
+
+    path = PROJECT_ROOT / "tools" / "book" / "build.py"
+    spec = importlib.util.spec_from_file_location("book_build", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules["book_build"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_book_builder_contract() -> None:
+    """The generator builds the real book: pages, search index, no problems."""
+    module = _load_book_builder()
+    book_dir = PROJECT_ROOT / "book"
+    book = module.load_book(book_dir)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        problems, warnings = module.build(book, book_dir, out)
+        assert not problems, problems
+        assert not warnings, warnings
+        assert (out / "index.html").is_file()
+        assert (out / "assets" / "book.css").is_file()
+        assert (out / ".nojekyll").is_file()
+        index = json.loads((out / "search.json").read_text())
+        assert len(index) == len(book.entries)
+        for page in book.entries:
+            html_text = (out / f"{page.slug}.html").read_text()
+            assert "<h1" in html_text, page.file
+            assert f'<a href="{page.slug}.html"' in html_text or page.slug == "index"
+        assert not module.check(book, book_dir)[0]
+
+
+def test_book_builder_fails_loudly() -> None:
+    """Unsupported or broken markdown is a build error, never silence."""
+    module = _load_book_builder()
+    config = """title = "Test Book"
+[[front]]
+file = "index.md"
+title = "Cover"
+[[part]]
+title = "Part I. Test"
+chapters = [ { file = "01-one.md", title = "One" } ]
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        book_dir = Path(tmp)
+        (book_dir / "assets").mkdir()
+        (book_dir / "assets" / "book.css").write_text("")
+        (book_dir / "book.toml").write_text(config)
+        (book_dir / "index.md").write_text("# Test Book\n")
+
+        (book_dir / "01-one.md").write_text("# One\n\n```bash\nunclosed\n")
+        problems, _ = module.build(module.load_book(book_dir), book_dir, book_dir / "out")
+        assert any("unclosed code fence" in problem for problem in problems), problems
+
+        (book_dir / "01-one.md").write_text("# One\n\n::: bogus\nbody\n:::\n")
+        problems, _ = module.build(module.load_book(book_dir), book_dir, book_dir / "out")
+        assert any("unknown callout type" in problem for problem in problems), problems
+
+        (book_dir / "01-one.md").write_text("# One\n\nSee [nothing](no-such-page.md).\n")
+        problems, _ = module.check(module.load_book(book_dir), book_dir)
+        assert any("not in book.toml" in problem for problem in problems), problems
+
+        (book_dir / "01-one.md").write_text("# One\n\nSee [gone](repo:no/such/file.te).\n")
+        problems, _ = module.check(module.load_book(book_dir), book_dir)
+        assert any("does not exist" in problem for problem in problems), problems
+
+
 def main() -> int:
     tests = [
         ("prompts", test_prompts),
@@ -1942,6 +2012,8 @@ def main() -> int:
         ("tune_report", test_tune_report),
         ("tune_report_skip_no_selinux", test_tune_report_skip_no_selinux),
         ("force_reason_recorded", test_force_reason_recorded),
+        ("book_builder_contract", test_book_builder_contract),
+        ("book_builder_fails_loudly", test_book_builder_fails_loudly),
     ]
     for name, fn in tests:
         fn()

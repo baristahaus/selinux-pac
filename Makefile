@@ -7,7 +7,7 @@ PIP ?= pip3
 .PHONY: help deps test check lint fixtures test-smoke test-static test-manifest \
 	test-rpm test-forbidden test-version test-fixtures test-blast-radius \
 	lint-shell lint-yaml lint-ansible integration-compile integration-semantics \
-	training-lab demo-bootstrap
+	training-lab demo-bootstrap book book-check book-serve
 
 help: ## List targets (default)
 	@echo "SELinux demo — common targets:"
@@ -23,7 +23,7 @@ deps: ## Install Python deps for offline tests (no network after first run)
 test: deps test-fixtures test-static test-smoke ## Offline health check (no SELinux host required)
 	@echo "make test OK"
 
-check: test lint ## Full repo health: offline tests + linters when installed
+check: test lint book-check ## Full repo health: offline tests + linters + book links
 
 fixtures: test-fixtures ## Deterministic + payments + blast-radius fixture suites only
 
@@ -97,6 +97,15 @@ integration-blast-radius: ## Blast-radius with live sesearch (CI / rhel-dev)
 
 training-lab: ## Dry-run the customer talk (no SELinux required)
 	bash scripts/demo_present.sh --dry-run --profile customer --no-type --auto
+
+book: ## Build the HTML manual into site/ (tools/book/build.py)
+	$(PYTHON) tools/book/build.py
+
+book-check: ## Validate the manual: internal links, anchors, repo: references
+	$(PYTHON) tools/book/build.py --check
+
+book-serve: ## Build the manual and serve it at http://127.0.0.1:8000
+	$(PYTHON) tools/book/build.py --serve 8000
 
 demo-bootstrap: ## Stand up App A/B + shopapi on RHEL (idempotent; not for macOS)
 	bash scripts/demo_bootstrap.sh

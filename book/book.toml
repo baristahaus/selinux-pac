@@ -1,0 +1,84 @@
+title = "SELinux for Developers and Administrators"
+subtitle = "Security as code: from one denial to a reviewed module in production"
+edition = "First edition"
+description = "A hands-on SELinux manual for application developers and RHEL administrators: read an AVC, write policy, test it offline, review it like code, and ship it without turning SELinux off."
+repo = "https://github.com/anurag-saran/selinux-pac"
+branch = "main"
+site_url = "https://anurag-saran.github.io/selinux-pac"
+
+[[front]]
+file = "index.md"
+title = "Cover and Contents"
+
+[[front]]
+file = "preface.md"
+title = "Preface"
+
+[[front]]
+file = "lab.md"
+title = "Your Lab"
+
+[[part]]
+title = "Part I. Why SELinux still matters"
+blurb = "The kernel decision behind every denial, the label model that produces it, and why 'turn it off' costs more than it saves. Read this part even if you only ever review other people's policy."
+chapters = [
+  { file = "part1/01-the-default-answer.md", title = "The Default Answer" },
+  { file = "part1/02-what-selinux-actually-checks.md", title = "What SELinux Actually Checks" },
+  { file = "part1/03-labels-are-the-interface.md", title = "Labels Are the Interface" },
+  { file = "part1/04-reading-a-denial.md", title = "Reading a Denial" },
+  { file = "part1/05-modes-and-the-cost-of-off.md", title = "Modes, and the Cost of Off" },
+]
+
+[[part]]
+title = "Part II. The policy language"
+blurb = "The five files that make a module, the type system underneath them, and the decisions that separate a reviewable rule from a dangerous one."
+chapters = [
+  { file = "part2/06-anatomy-of-a-module.md", title = "Anatomy of a Module" },
+  { file = "part2/07-types-attributes-and-classes.md", title = "Types, Attributes and Classes" },
+  { file = "part2/08-allow-rules-and-interfaces.md", title = "Allow Rules and Interfaces" },
+  { file = "part2/09-file-contexts-and-the-label-lifecycle.md", title = "File Contexts and the Label Lifecycle" },
+  { file = "part2/10-ports-booleans-and-transitions.md", title = "Ports, Booleans and Transitions" },
+  { file = "part2/11-designing-a-domain.md", title = "Designing a Domain" },
+  { file = "part2/12-when-policy-says-no.md", title = "When Policy Says No" },
+]
+
+[[part]]
+title = "Part III. Security as code"
+blurb = "The generator that turns AVC lines into a reviewed diff, the fixtures that pin its behaviour, and the gates that keep a dangerous rule out of main."
+chapters = [
+  { file = "part3/13-from-denial-to-pull-request.md", title = "From Denial to Pull Request" },
+  { file = "part3/14-the-verdict-table.md", title = "The Verdict Table" },
+  { file = "part3/15-tests-as-specification.md", title = "Tests as Specification" },
+  { file = "part3/16-ci-gates.md", title = "The Gates in CI" },
+  { file = "part3/17-reviewing-a-policy-pull-request.md", title = "Reviewing a Policy Pull Request" },
+]
+
+[[part]]
+title = "Part IV. Ship and operate"
+blurb = "Policy leaves the repository as a signed RPM and arrives in production through a canary, a soak, and an approval. Rollback is a planned operation, not an outage decision."
+chapters = [
+  { file = "part4/18-packaging-policy-as-rpms.md", title = "Packaging Policy as RPMs" },
+  { file = "part4/19-canary-soak-enforce.md", title = "Canary, Soak, Enforce" },
+  { file = "part4/20-incidents.md", title = "Incidents: the 02:00 Card" },
+  { file = "part4/21-production-readiness.md", title = "Production Readiness" },
+]
+
+[[part]]
+title = "Part V. Beyond one application"
+blurb = "Many applications on one host, inherited vendor policy, containers, audit forensics, and the boundary of what SELinux will never do for you."
+chapters = [
+  { file = "part5/22-fleets-and-inherited-policy.md", title = "Fleets and Inherited Policy" },
+  { file = "part5/23-containers.md", title = "Containers, Namespaces and MCS" },
+  { file = "part5/24-audit-forensics.md", title = "Audit Forensics" },
+    { file = "part5/25-where-selinux-ends.md", title = "Where SELinux Ends" },
+]
+
+[[part]]
+title = "Appendices"
+kind = "appendix"
+blurb = "Reference material: every command this book uses, every fixture the generator is pinned to, and the vocabulary the chapters assume."
+chapters = [
+  { file = "appendix/command-reference.md", title = "Command Reference" },
+  { file = "appendix/fixture-catalogue.md", title = "Fixture Catalogue" },
+  { file = "appendix/glossary.md", title = "Glossary" },
+]
