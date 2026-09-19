@@ -72,7 +72,7 @@ inventory.production.yml
 
 The `canary` group is one node. The `production` group is the rest. The first run targets `canary`; the second run targets `production`. The difference between the two is one `--limit` switch on the controller.
 
-The blast-radius classifier, `scripts/classify_policy_blast_radius.sh`, reads the base `.te`/`.fc` and the candidate, and answers three things the operator needs: which tier of soak this delta owns (`low`, `medium`, or `high`), how many days that tier requires (`1`, `3`, `7`), and the reason — one of "Only module-private types changed", "Refpolicy interface or non-module type expansion detected", "Direct allow on base policy type detected", or "Entrypoint permission added". The script is gated on the fixture set under `tests/fixtures/blast_radius/`; changing tier logic without updating fixtures and passing `make test-fixtures` breaks the gate.
+The blast-radius classifier, `scripts/classify_policy_blast_radius.sh`, reads the base `.te`/`.fc` and the candidate, and answers three things the operator needs: which tier of soak this delta owns (`low`, `medium`, or `high`), how many days that tier requires (`1`, `3`, `7`), and the reason — including "Only module-private types changed", "Refpolicy interface or non-module type expansion detected", "Direct allow on base policy type detected", "Entrypoint permission added", and "Entrypoint or domain transition change detected" for any added `type_transition`, `type_member`, or `role_transition` rule (the classifier's fail-closed paths have their own strings). The script is gated on the fixture set under `tests/fixtures/blast_radius/`; changing tier logic without updating fixtures and passing `make test-fixtures` breaks the gate.
 
 With `--auto-tier`, `check_soak_ready.sh` adopts the classified count as the minimum — it does not take the larger of the two. Fail-closed applies to the classifier's error paths: when it cannot run or cannot read its inputs, the gate keeps the configured floor.
 
@@ -87,7 +87,7 @@ The checklist in §13 of the production runbook is the accountability map. Each 
 | Staging soak 7+ days complete | `collect_soak_facts.sh` days_elapsed ≥ `soak_min_days` | Operator |
 | Full business cycle is clean | `soak_monitor.yml` net-new count = 0, including weekends | Operator |
 | Prod canary host deployed and soaked separately | Same gate on `--limit canary`, marker file exists, app healthy | Operator |
-| Path labeling verified after last canary deploy | `verify_file_contexts.sh` `[INFO] File context verification passed` | Operator |
+| Path labeling verified after last canary deploy | `verify_file_contexts.sh` `[INFO] File context verification passed for myapp` | Operator |
 | Backend unit active; health and notify probes succeed | HTTP 200 on each manifest endpoint from the canary node | App team |
 | PR admin review table signed off | `PULL_REQUEST_TEMPLATE/selinux_policy_review.md` checklist all checked | Admin reviewer |
 | Change ticket documents window and rollback owner | `change_ticket` set in `enforce_production.yml`; `force_enforce` false | Operator |
@@ -122,7 +122,7 @@ Sometimes the right answer is no policy change at all. The generator refuses JWS
 
 ::: try Run the soak gate against the lab
 
-The invocation below is the same gate the enforce role calls — and the same one documented with pass/fail examples in §12 of the production runbook. Run it on `rhel-qa`, where the checkout exists, the marker file exists, and the operator controls the clock.
+The invocation below is the host-side CLI for the same checks the enforce role makes — and the same one documented with pass/fail examples in §12 of the production runbook. The role itself runs `collect_soak_facts.sh` and evaluates its JSON; the two answer the same questions, and `check_soak_ready.sh` is the one you can run by hand. Run it on `rhel-qa`, where the checkout exists, the marker file exists, and the operator controls the clock.
 
 ```bash
 cd /home/<user>/selinux-pac

@@ -123,17 +123,18 @@ $ ausearch -m avc -ts recent
 $ journalctl -u myapp -n 1 --no-pager
 myapp[891]: connect to 10.0.0.5:5432 failed: Operation not permitted
 
-$ systemctl cat myapp | grep SystemCallFilter
+$ systemctl cat myapp | grep -E 'SystemCallFilter|SystemCallErrorNumber'
 SystemCallFilter=~@clock @debug @network-io @privileged
+SystemCallErrorNumber=EPERM
 ```
 
-The call fails with `EPERM` and **audit.log holds nothing** — SELinux never saw it, because the kernel did not reach the LSM. `SystemCallFilter=~@network-io` dropped the syscall first, so the owning layer is the **systemd unit**. Fix: remove `@network-io` from the deny list for a unit that needs the network, or drop the network need — do not go looking for an allow that cannot exist.
+The call fails with `EPERM` and **audit.log holds nothing** — SELinux never saw it, because the kernel did not reach the LSM. `SystemCallFilter=~@network-io` dropped the syscall first, so the owning layer is the **systemd unit**. Note the second line: without `SystemCallErrorNumber=EPERM` the filter kills the process with `SIGSYS` instead of handing back an errno — the journal then shows a core dump, not this message. Fix either way: remove `@network-io` from the deny list for a unit that needs the network, or drop the network need — do not go looking for an allow that cannot exist.
 
 ### Scenario 3 — the firewall (no AVC)
 
 ```text
 $ curl -sS -m 5 https://10.0.0.5/health
-curl: (7) Failed to connect to 10.0.0.5 port 443: No route to host
+curl: (7) Failed to connect to 10.0.0.5 port 34567: No route to host
 
 $ ausearch -m avc -ts recent
 <no matches>
@@ -142,7 +143,7 @@ $ sesearch -A -s shopapi_t -c tcp_socket -p name_connect | head -n 1
 allow shopapi_t unreserved_port_t:tcp_socket name_connect;
 ```
 
-The policy allows `name_connect` to the port type, no AVC was written, the unit has no syscall filter — and the packet never leaves. `No route to host` is a `REJECT` rule answering; a `DROP` shows as a timeout instead. The owning layer is the **firewall**. Fix: add the peer to the allow-list on the firewall, or confirm that the call is the right one in the first place.
+The policy allows `name_connect` to the port type — to *every* port the policy leaves unlabelled, not just this one — so no AVC was written; the unit has no syscall filter; and the packet never leaves. `No route to host` is a `REJECT` rule answering; a `DROP` shows as a timeout instead. The owning layer is the **firewall**. Fix: add the peer to the allow-list on the firewall — or, if that coarse port-type grant is uncomfortable, narrow it to the application's own port type in the manifest — and confirm that the call is the right one in the first place.
 
 Each scenario names the layer. Each layer owns the fix.
 

@@ -154,7 +154,7 @@ no guessed defaults.
 | `make book-check` | Validates the manual (internal links, anchors, `repo:` references) via `python3 tools/book/build.py --check` | `laptop` |
 | `bash scripts/dev_generate_policy.sh` | Developer self-service: export AVCs → run `cli/deterministic_gen.py` → generate policy → diff → promote into `selinux/`; supports `--apply`, `--tune-report`, `--force REASON`, `--allow-needs-review`, `--skip-export`, `--open-pr` | `build host` (for promote) / `laptop` (for explain) |
 | `bash scripts/setup_rhel_hosts.sh doctor` | `getenforce`, `ausearch`, and `sesearch` probes on each RHEL host — configured in `inventory.dev.yml` and `inventory.production.yml` | `rhel host`, `root` |
-| `ansible-playbook` (canary) / `ansible-playbook` (soak) | Deploys the canary module (`part4/19-canary-soak-enforce.md`) or runs the daily soak monitor — `soak_monitor.yml` calls `monitor_avc.sh --manifest … --max-net-new …`, `soak_status.yml` calls `collect_soak_facts.sh`. (`check_soak_ready.sh` is the host-side CLI for the same gate, and the enforce role's own precondition) | `controller`, `rhel host` |
+| `ansible-playbook` (canary) / `ansible-playbook` (soak) | Deploys the canary module (`part4/19-canary-soak-enforce.md`) or runs the daily soak monitor — `soak_monitor.yml` calls `monitor_avc.sh --manifest … --max-net-new …`, `soak_status.yml` calls `collect_soak_facts.sh`. (`check_soak_ready.sh` is the host-side CLI for the same checks; the role itself runs `collect_soak_facts.sh`) | `controller`, `rhel host` |
 
 ::: note `make test-fixtures` is the smoke test for the generator
 Because every classification verdict has at least one golden fixture under

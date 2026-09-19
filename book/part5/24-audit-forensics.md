@@ -68,8 +68,8 @@ Every question asks about the same log. Each query selects a different lens.
 
 | Query | What it answers |
 |-------|-----------------|
-| **`ausearch -m avc`** | *What did the policy block today?* |
-| **`ausearch -ts recent`** | *What happened in the last ten minutes?* (`recent` is ten minutes; the other keywords are `today`, `this-hour`, `boot`, `this-week`, `week-ago`, `this-month`, `this-year`.) |
+| **`ausearch -m avc -ts today`** | *What did the policy block today?* Without `-ts` the search covers the whole log range, not today. |
+| **`ausearch -ts recent`** | *What happened in the last ten minutes?* (the keywords are `now`, `recent` — ten minutes — `this-hour`, `boot`, `today`, `yesterday`, `this-week`, `week-ago`, `this-month`, `this-year`, and `checkpoint`.) |
 | **`ausearch -ts 09/17/2026 14:00:00`** | *What happened during this window?* The date must match your locale — `date +%x` prints the format `ausearch` will accept. |
 | **`ausearch -p 1234`** | *What did this process do?* |
 | **`ausearch -i`** | *What does this log look like to a human?* (interprets uids and contexts into names.) |
@@ -90,7 +90,7 @@ Each report type answers a different question about the same log.
 |--------|-----------------|
 | **`aureport --avc`** | *Which AVCs fired, in order?* — one row per event, with the subject and the target. |
 | **`aureport --summary`** | *How much did the policy block in total?* — the main summary report, with a `Number of AVC's` line. |
-| **`aureport --failed`** | *Which syscalls failed, and by which process?* — great for finding a service that fails quietly rather than visibly |
+| **`aureport --failed`** | the *Failed Summary Report* — counts per category, not per event. For the rows, add the report: `aureport --syscall --failed` prints `# date time syscall pid comm auid event`, which is how you find a service that fails quietly. |
 
 The soak path does its own counting, per domain rather than in total: `scripts/lib/avc_query.sh` converts the marker's epoch with `avc_epoch_to_ts` (epoch seconds are not a valid `-ts` value) and then runs `ausearch --input-logs -m AVC,USER_AVC,SELINUX_ERR,USER_SELINUX_ERR -ts "<MM/DD/YYYY HH:MM:SS>" --subject <domain> --format raw`, counting the `type=AVC` lines. **That** is the number the soak gate compares against the marker's deploy epoch — `aureport` is for reading, not for gating.
 
