@@ -42,7 +42,7 @@ bash scripts/selinux_pac_adopt.sh doctor
 bash scripts/selinux_pac_adopt.sh init <app_name>
 ```
 
-`doctor` checks prerequisites (`getenforce`, `ausearch`, `sesearch`, `ansible-playbook`). `init <app_name>` emits six steps. The subcommands take one of two options:
+`doctor` checks prerequisites (`getenforce`, `ausearch`, `sesearch`, `ansible-playbook`). `init <app_name>` emits seven steps (manifest, scaffold, validate, compile, two-host lab, canary on QA, prod canary/soak/enforce). The subcommands take one of two options:
 
 | Option | Meaning |
 |--------|---------|
@@ -66,7 +66,7 @@ Every consumer — `cli/deterministic_gen.py`, `cli/soak_net_new.py`, the Ansibl
 A fleet is not one app per host — it is one host per app. Each app holds its own domain, its own `.te`, its own manifest, and its own soak. Per-domain permissive stays per domain: `semanage permissive -a shopapi_t` is independent of `semanage permissive -a jws6_tomcat_t`. The canary is per host group and per domain rather than per release — it answers "is this install time or net new?" at the domain level, which is why `cli/soak_net_new.py` reads the domain out of the manifest.
 
 ::: why The unit of risk is the domain, not the application artefact
-Two apps sharing a domain share their fate. shopapi and App B both run on `jws6_tomcat_t`; a regression in the vendor policy for that domain affects both. When you add a service, own the domain — do not let it inherit a shared label whose policy was tuned only for the first owner.
+Two apps sharing a domain share their fate. App A and App B both run on `jws6_tomcat_t`; a regression in the vendor policy for that domain affects both. shopapi is the opposite case — it owns `shopapi_t`, and the whole chapter is about keeping it that way. When you add a service, own the domain — do not let it inherit a shared label whose policy was tuned only for the first owner.
 :::
 
 ::: try Run the pre-flight and the adopt script on a laptop
@@ -78,7 +78,7 @@ bash scripts/selinux_pac_adopt.sh doctor
 bash scripts/selinux_pac_adopt.sh init <app_name> --manifest /tmp/<app_name>.manifest.yml
 ```
 
-Both exit without writing policy. The output is narration plus the expected host commands; no module, no JVM, no podman. On a real RHEL box, `--dry-run` is replaced by `--preflight` and a live `check_vendor_policy()` run.
+Both exit without writing policy. The output is narration plus the expected host commands; no module, no JVM, no podman. Those are the laptop forms. On a real RHEL host the demo's `--dry-run` is replaced by `--preflight` (a check-the-host-and-exit pass over `getenforce`, the unit, App A's label and its ports), and `dev_generate_policy.sh` runs `check_vendor_policy()` live before it writes anything.
 :::
 
 ## Shared resources between applications

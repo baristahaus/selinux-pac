@@ -13,7 +13,7 @@ decision the verdict rewards.
 | Directory | Verdict | What the AVC asked | Correct response | Chapter teaches it |
 |---|---|---|---|---|
 | `01-mislabeled-var-lib` | `fc_drift` | `write` on `/var/lib/myapp/data.log`, target type `var_lib_t` | `restorecon` — the path is already covered by `/var/lib/myapp(/.*)?` | [File Contexts and the Label Lifecycle](repo:book/part2/09-file-contexts-and-the-label-lifecycle.md) |
-| `02-port-bind` | `private_port` | `name_bind` on port 8888, target type `unreserved_port_t` | Add a private port to the manifest; the generator suggests `semanage port -a` | [Ports, Booleans and Transitions](repo:book/part2/10-ports-booleans-and-transitions.md) |
+| `02-port-bind` | `private_port` | `name_bind` on port 8888, target type `unreserved_port_t` | Add the port to the manifest's `selinux_ports` — the golden output says `add to manifest selinux_ports, do not semanage port -a on prod`; the canary's `seport` step registers it | [Ports, Booleans and Transitions](repo:book/part2/10-ports-booleans-and-transitions.md) |
 | `03-shadow-read` | `forbidden` | `read open` on `shadow`, target type `shadow_t` | refuse — exit 1, never emit the rule | [When Policy Says No](repo:book/part2/12-when-policy-says-no.md) |
 | `04-boolean-network-connect` | `boolean` | `name_connect` to `http_port_t` | consult `sesearch` (or the boolean mock); set `httpd_can_network_connect` | [When Policy Says No](repo:book/part2/12-when-policy-says-no.md) |
 | `05-baseline-covered` | `baseline` | `read open getattr` on `random_device_t` | no allow — `dev_read_urand` macro covers the tuple | [When Policy Says No](repo:book/part2/12-when-policy-says-no.md) |
@@ -23,7 +23,7 @@ decision the verdict rewards.
 | `09-direct-no-interface` | `direct` | `read open getattr` on `/usr/share/myapp/notes.txt`, target type `usr_t` | sepolgen ran but no macro matched; emit the raw allow | [Allow Rules and Interfaces](repo:book/part2/08-allow-rules-and-interfaces.md) |
 | `10-boolean-hint` | `boolean` | `name_connect` to `http_port_t` | curated override in `config/boolean_hints.yml`; offline query | [Ports, Booleans and Transitions](repo:book/part2/10-ports-booleans-and-transitions.md) |
 | `11-private-getopt` | `direct` | `getopt` on `myapp_port_t`, target type private to this module | raw allow — the type is application-private | [Designing a Domain](repo:book/part2/11-designing-a-domain.md) |
-| `12-execmem-review` | `needs_review` | `execmem` on self, domain to domain, `process` class | security decision; exit 1 without `--allow-needs-review` | [Reviewing a Policy Pull Request](repo:book/part3/17-reviewing-a-policy-pull-request.md) |
+| `12-execmem-review` | `needs_review` | `execmem` on self, domain to domain, `process` class | security decision; exit 1 without `--allow-needs-review` | [`needs_review`: execmem](repo:book/part2/12-when-policy-says-no.md) |
 | `13-cgroup-omit` | `baseline` | `getattr` on `cgroup_t`, target type `cgroup_t` | omitted — the type is often undeclared; no allow required | [When Policy Says No](repo:book/part2/12-when-policy-says-no.md) |
 
 :::: why Each verdict is the answer to a different question

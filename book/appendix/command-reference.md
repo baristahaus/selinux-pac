@@ -20,8 +20,10 @@ commands each show one slice of that status. All four must be run on a SELinux h
 :::: why Each of these answers a different question
 `getenforce` is "is it currently blocking", `sestatus` is "what is the policy version",
 `semanage permissive -l` is "which domains are we tolerating", and `/etc/selinux/config` is
-"what would we be on reboot". They never disagree with each other; they each answer a
-different slice of the same truth.
+"what would we be on reboot". They answer different slices of the same truth — and they
+routinely disagree, which is the point: `setenforce 0` leaves `getenforce` saying `Permissive`
+while the config file still says `SELINUX=enforcing`, and a kernel `enforcing=0` changes the
+running state without touching either. Never read one as proof of another.
 ::::
 
 ## See labels
@@ -51,13 +53,15 @@ These commands repair the gap between the label a path *should* have and the lab
 |---|---|---|
 | `restorecon -R -v <path>` | Re-applies the expected label from `/etc/selinux/.../contexts/files/` to the target and its children; `-v` is verbose | `rhel host`, `root` |
 | `semanage fcontext -a/-l/-d <path>` | Add, list, or delete a file context rule — used when `restorecon` cannot find the rule | `rhel host`, `root` |
-| `fixfiles relabel` | Full-file-system relabel; triggers a reboot if SELinux runs on the root filesystem | `rhel host`, `root` — **warning: reboot or live FS check** |
+| `fixfiles relabel` | Relabels every mounted filesystem in place; it prompts about `/tmp` first (deleting those files is the one destructive option) | `rhel host`, `root` |
+| `fixfiles onboot` | Schedules a relabel for the next boot (writes `/.autorelabel`) — this is the one that needs a reboot and a maintenance window | `rhel host`, `root` — **warning: reboot** |
 
-::: warn `fixfiles relabel` is the nuclear option
-The command re-labels *every* file on the box. When SELinux runs on `/`, the filesystem must
-boot into a special state for the relabel to complete — meaning a maintenance window is
-required. Use it only when the file context set itself has drifted at scale, not for a single
-path.
+::: warn `fixfiles` is the nuclear option
+`fixfiles relabel` re-labels *every* mounted filesystem, in place, while the host runs — and it
+asks first whether to delete the contents of `/tmp`, which is the part that destroys data.
+`fixfiles onboot` is the other shape: it schedules the relabel for the next boot, which is the
+one that costs a maintenance window. Use either only when the file context set itself has
+drifted at scale, never for a single path — that is `restorecon`.
 :::
 
 ## Ports
@@ -67,7 +71,7 @@ the `name_bind` allow, and the port's type tells the answer.
 
 | Command | What it tells you or changes | Needs |
 |---|---|---|
-| `semanage port -a/-m/-d/-l` | Add, modify, delete, or list port type definitions; every port in this repository is managed this way | `rhel host`, `root` |
+| `semanage port -a/-m/-d/-l` | Add, modify, delete, or list port type definitions. The repository's port registrations are driven from the manifest's `selinux_ports` (Ansible `seport`, or the packaged `ports_from_manifest.cil` where `semanage` is absent) — `semanage port -a` is the command you run by hand to inspect or repair, not the one the pipeline uses on production | `rhel host`, `root` |
 
 ## Booleans
 
@@ -94,8 +98,8 @@ is verified against `scripts/compile_and_validate.sh` and `scripts/lib/compile_p
 | `semodule -i <module>.pp` | Loads a compiled module binary into the running policy | `rhel host`, `root` |
 | `semodule -l` | Lists every module loaded into the running policy | `rhel host`, `root` |
 | `semodule -r <name>` | Removes a module from the running policy; unloads its rules | `rhel host`, `root` |
-| `checkmodule` | Syntax-checks a `.te`/`.fc` pair; used by the build pipeline but rarely called directly | `build host` |
-| `semodule_package` | Builds a `.pp` from `.te`/`.fc`/`.if`/`policy_version.txt`; the thin wrapper around the build | `build host` |
+| `checkmodule` | Compiles a single policy source file into a binary module (`checkmodule -M -m myapp.te -o myapp.mod`); it never reads a `.fc` | `build host` |
+| `semodule_package` | Wraps that binary module plus its file contexts into the installable package (`semodule_package -o myapp.pp -m myapp.mod -f myapp.fc`) | `build host` |
 | `make -C <work_dir> -f /usr/share/selinux/devel/Makefile <name>.pp` | The canonical refpolicy build invocation: copies `.te`/`.fc`/`.if` into a work directory, runs `make` there, and emits `<name>.pp` | `build host` |
 
 ::: why the Makefile is the only build line
@@ -114,8 +118,8 @@ each one are different — `sesearch` is a rule lookup, `seinfo` is an attribute
 | Command | What it tells you or changes | Needs |
 |---|---|---|
 | `sesearch -A -s <src_t> -t <tgt_t> -c <class> -p <perm>` | Searches the running policy for matching `allow` rules; returns each rule verbatim | `rhel host`, `root` |
-| `seinfo -a <attribute> -x` | Lists every type that carries `<attribute>`; requires policy XML (from `policycoreutils-devel`) | `rhel host`, `root` |
-| `sepolgen-ifgen` | Builds the sepolgen interface database from the policy XML under `/usr/share/selinux/…/modules`, which is what interface matching reads; requires `policycoreutils-devel`. It generates no `.if` files — those are refpolicy source that ships with `selinux-policy-devel` | `rhel host`, `root` |
+| `seinfo -a <attribute> -x` | Lists every type that carries `<attribute>`. It reads the binary policy — the running one, or a `--policy <policy.kern>` file — and ships in `setools-console`, the same package as `sesearch` | `rhel host`, `root` |
+| `sepolgen-ifgen` | Builds the interface database interface matching reads: it parses the refpolicy headers under `/usr/share/selinux/devel` and reads the binary policy's attributes, then writes `/var/lib/sepolgen/interface_info`. It generates no `.if` files — those ship with `selinux-policy-devel` | `rhel host`, `root` |
 
 ::: note The generator asks the database, not a hint command
 Interface suggestions in this book come from `sepolgen` reading the database that
