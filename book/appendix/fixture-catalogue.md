@@ -102,6 +102,7 @@ category of question the book asks about.
 | **blast radius** | `scripts/classify_policy_blast_radius.sh` classifies candidate policy deltas against base policy | `tests/fixtures/blast_radius/`; `scripts/run_blast_radius_fixtures.sh` |
 | **`tune_report`** | `--tune-report` generates only host commands (no `.te`); it classifies vendor-domain denials | `docs/examples/fixtures/tune_report/`; `scripts/run_tune_report_fixtures.sh` |
 | **`skip_ai`** | Offline demo fixture — `baseline/` is the "before" state, `generated/` is the "after" state, `avc.log` is the recorded audit | `docs/examples/fixtures/skip_ai/README.md`; `scripts/refresh_skip_ai_fixture.sh` |
+| **`policy_diff`** | The `### Policy access delta` block that `scripts/assemble_pr_body.sh` splices into the PR body — added and removed allow lines, as text | `docs/examples/fixtures/policy_diff/sample_delta.md`; the `assemble_pr_body_policy_diff_section` test in `scripts/smoke_test.py` |
 | **smoke tests** | Every classification verdict has at least one golden fixture row; every branch test in `classify_policy_blast_radius.sh`; boolean, FC, vendor, soak gates | `scripts/smoke_test.py` |
 
 :::: note each family answers one question
