@@ -197,6 +197,7 @@ A denial you cannot explain is a finding, not an obstacle. If the log is blank a
 
 ```bash
 # copy first — never edit the tracked files:
+$ mkdir -p /tmp/myapp-check
 $ cp selinux/myapp.te selinux/myapp.fc /tmp/myapp-check/
 $ cd /tmp/myapp-check
 
