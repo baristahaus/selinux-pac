@@ -15,13 +15,11 @@ Every `audit.log` line is the answer to one tuple. But when you reach for a rule
 A `neverallow` or a constraint sits on top of a base policy, typically in the base policy's
 `policy/modules/system/` tree or a per-feature module such as `httpd.te` in the reference policy
 sources. The language lets a policy author forbid a specific tuple across every module compiled
-against that base: `neverallow myapp_t shadow_t:file { read open };`. A compile error from a
-`neverallow` is loud — it stops `make`, and `checkmodule` refuses to continue. The error line
-names the tuple that the base policy forbids.
+against that base: `neverallow myapp_t shadow_t:file { read open };`. A `neverallow` violation is loud, but it is not a `checkmodule` error: the assertion lives in the base policy, and `checkmodule` compiles your module alone, with no base to check it against. The failure comes when the whole policy is assembled — refpolicy's `make` over a full tree, or the policy link that `semodule -i` performs — and the error names the tuple the base forbids.
 
 A rule outside the module cannot grant what the base policy forbids. If you ship a module with `allow myapp_t shadow_t:file read;` and the targeted policy carries a `neverallow` covering that tuple, the compile will fail regardless of your intent. The module you wrote is a layer above the base; it is not a patch over the base.
 
-The compile-time signal is therefore a *description* of a behaviour: the base policy declares this tuple forbidden. There is no transcript in this book for every `neverallow` — each distro carries its own set. The example above is illustrative, not a transcript of a live file. The behaviour is the same: the build refuses, and the tuple names the forbidden boundary.
+The compile-time signal is therefore a *description* of a behaviour: the assembled policy declares this tuple forbidden. There is no transcript in this book for every `neverallow` — each distro carries its own set. The example above is illustrative, not a transcript of a live file. The behaviour is the same: the build refuses, and the tuple names the forbidden boundary.
 
 ## Runtime denials and the rules you must write
 
@@ -46,7 +44,7 @@ Missing policy_module() declaration
 Domain myapp_t not referenced in selinux/myapp.te
 ```
 
-The same verdicts also live in `cli/policy_rules.py`. The generator carries `FORBIDDEN_TARGET_TYPES` — `shadow_t`, `unconfined_t`, `sysadm_t`, `security_t`, `selinux_config_t`, `passwd_file_t` — and `GENERIC_FILE_TYPES` — `var_t`, `var_lib_t`, `var_log_t`, `var_run_t`, `usr_t`, `etc_t`, `tmp_t`, `default_t`, `unlabeled_t`, `home_root_t`, `user_home_t`, `user_home_dir_t` — and `GENERIC_PORT_TYPES` — `unreserved_port_t`, `port_t`, `reserved_port_t`, `ephemeral_port_t`. Each list is a refusal: a tuple targeting any of these names is the default *forbidden*.
+The same verdicts also live in `cli/policy_rules.py`. The generator carries `FORBIDDEN_TARGET_TYPES` — `shadow_t`, `unconfined_t`, `sysadm_t`, `security_t`, `selinux_config_t`, `passwd_file_t` — and `GENERIC_FILE_TYPES` — `var_t`, `var_lib_t`, `var_log_t`, `var_run_t`, `usr_t`, `etc_t`, `tmp_t`, `default_t`, `unlabeled_t`, `home_root_t`, `user_home_t`, `user_home_dir_t` — and `GENERIC_PORT_TYPES` — `unreserved_port_t`, `port_t`, `reserved_port_t`, `ephemeral_port_t`. Only the first list is a refusal. A tuple targeting a `FORBIDDEN_TARGET_TYPES` name is `forbidden` and blocks generation. The other two lists route instead: a `GENERIC_FILE_TYPES` target becomes `fc_fix` or `fc_drift` when the path can carry a label of its own, and a plain `direct` allow when it cannot; a `GENERIC_PORT_TYPES` target becomes `private_port`, which moves the port onto the application's own type through the manifest.
 
 The generator records a `forbidden` verdict in `findings.json`, sets `generation_blocked: true` in that same file, and exits with code 1, printing the refusal:
 
@@ -81,13 +79,13 @@ The case meta confirms the exit:
 }
 ```
 
-A rule targeting `shadow_t` is *forbidden*. The generator refuses to write it; the gate refuses to carry it. `shadow_t` is the label the base policy gives to the system authentication file; every allow rule against it widens the domain to the root account's home.
+A rule targeting `shadow_t` is *forbidden*. The generator refuses to write it; the gate refuses to carry it. `shadow_t` is the label the base policy gives to the authentication database itself — `/etc/shadow`, `/etc/gshadow`; an allow rule against it reaches the password hashes.
 
 A rule targeting `var_t:file write` is refused on the same principle. `var_t` covers every file under `/var`. A `write` against `var_t` lets the domain edit any log, any spool, any state directory under `/var`. The gate names the dedicated application type as the replacement — `myapp_var_lib_t` for `/var/lib/myapp`, `myapp_log_t` for `/var/log/myapp`.
 
 ## `dontaudit` and `auditallow`
 
-A denial covered by `dontaudit` looks identical to a denial from a missing rule — the process fails with `EPERM` and the log is blank. `dontaudit` does not allow anything: it suppresses the AVC record for that tuple, and nothing else. The kernel's decision is still *denied*; what disappears is the evidence. The base policy is full of them for exactly that reason — a browser probing for `~/.config`, a service checking a file it will never find — so that normal operation does not fill `audit.log` with failures nobody will act on.
+A denial covered by `dontaudit` fails the same way as any other denial — the process gets `EPERM` — but it leaves no trace: a denial from a missing rule is recorded in `audit.log`, and a denial covered by `dontaudit` is not. `dontaudit` does not allow anything: it suppresses the AVC record for that tuple, and nothing else. The kernel's decision is still *denied*; what disappears is the evidence. The base policy is full of them for exactly that reason — a browser probing for `~/.config`, a service checking a file it will never find — so that normal operation does not fill `audit.log` with failures nobody will act on.
 
 Two commands manage the suppression. `semodule -DB` disables the entire `dontaudit` block on the host; `semodule -B` restores it. The canary role runs `-DB` at canary start so soak does not miss denials hidden by `dontaudit`; a failed canary and the rollback path both run `-B`. The host-wide change is documented in [302-PRODUCTION_READINESS.md](docs/admin/302-PRODUCTION_READINESS.md) §206 and [207-SELINUX_BEST_PRACTICES.md](docs/policy/207-SELINUX_BEST_PRACTICES.md) §134. Running `-DB` sends you after the same application bug you would have chased anyway, but shows the denials, and it is required before you conclude that a soak found zero denial.
 
@@ -101,7 +99,7 @@ The common mistake is treating a `dontaudit` silence as a fix. The access was st
 
 `permissive myapp_t;` is a declaration, not a rule with a scope of its own: it puts the whole **domain** on the permissive list, so every denial for `myapp_t` is recorded as `permissive=1` instead of being blocked. The kernel still evaluates the policy and still writes the AVC — what changes is the answer, not the visibility.
 
-This repository carries that declaration as [`selinux/myapp_canary.te`](selinux/myapp_canary.te), a two-line overlay module whose only job is `permissive myapp_t;` (plus `myapp_backend_t` and `init_t`, for the systemd edge cases). The canary role installs it only when `semanage` is missing on the host; when `semanage` exists it uses `community.general.selinux_permissive` instead, which is the same declaration loaded by `semanage permissive -a myapp_t`. Enforce removes the flag either way — `semanage permissive -d {{ domain }}`, or `semodule -r` of the overlay.
+This repository carries that declaration as [`selinux/myapp_canary.te`](selinux/myapp_canary.te), a small overlay module — one `policy_module` line, a `require` block, and three `permissive` declarations — whose job is the flag on `myapp_t` and on `myapp_backend_t` and `init_t` for the systemd edge cases. The canary role installs it only when `semanage` is missing on the host; when `semanage` exists it uses `community.general.selinux_permissive` instead, which is the same declaration loaded by `semanage permissive -a myapp_t`. Enforce removes the flag either way — `semanage permissive -d {{ domain }}`, or `semodule -r` of the overlay.
 
 The scope is identical in both forms — one domain, permissive — and that is the point: only the *delivery* differs. The overlay is a versioned artifact: it is reviewed in a PR, shipped in the RPM, and removed by the enforce role. `semanage permissive -a` is host-local state: it survives RPM changes, appears nowhere in the git history, and stays until somebody removes it. Chapter 2 covers the running-domain view; this chapter's only concern is that no permissive declaration — compiled or runtime — is a fix for a denial.
 
@@ -185,7 +183,7 @@ Accept the denial. If the tuple is `allow myapp_t self:process execmem;` and the
 Each alternative costs the same thing — the developer has to change the shape of the application or the shape of the domain. Each denial you cannot explain is a finding.
 
 :::: why The repository's own verdict is the only thing stopping the bad rule from shipping
-When the operator skips the PR body and runs `semodule -i` from `policy_out/`, the next stage is a denial response. The gate fires on each line in the table above; the fixture for `shadow_t` proves this exactly. A rule targeting `shadow_t` is *forbidden*. The generator refuses to write it; the gate refuses to carry it. `shadow_t` is the label the base policy gives to the system authentication file; every allow rule against it widens the domain to the root account's home.
+When the operator skips the PR body and runs `semodule -i` from `policy_out/`, the next stage is a denial response. The gate fires on each line in the table above; the fixture for `shadow_t` proves this exactly. A rule targeting `shadow_t` is *forbidden*. The generator refuses to write it; the gate refuses to carry it. `shadow_t` is the label the base policy gives to the authentication database itself — `/etc/shadow`, `/etc/gshadow`; an allow rule against it reaches the password hashes.
 ::::
 :::: warn Never widen policy to make a denial disappear
 A denial you cannot explain is a finding, not an obstacle. If the log is blank and the service runs, either the tuple is covered by `dontaudit` or the domain is permissive — neither is the same as *allowed*. A rule that widens the domain to make a service survive a week is not a fix; it is a recording. Read the log before widening.

@@ -267,7 +267,7 @@ tclass=dir permissive=1
 }
 ```
 
-The generator prints the banner from `emit_sepolgen_warning()` in `cli/deterministic_gen.py` and returns `1`. The operator installs `policycoreutils-devel`, runs `sepolgen-ifgen`, and reruns. Alternatively, `--allow-degraded` turns the blocked row into a `direct` allow with `engine=degraded`, generation completes, and the run exits `0` — the files are written and the reviewer is expected to treat those rows as `audit2allow` output. The flag is the escape hatch for a host that has a loaded policy but no sepolgen; it is not a way to skip the interface question silently.
+The generator prints the banner from `emit_sepolgen_warning()` in `cli/deterministic_gen.py` and returns `1`. The operator installs `policycoreutils-devel`, runs `sepolgen-ifgen`, and reruns. Alternatively, when the boolean check *did* run and only `sepolgen` is missing, `--allow-degraded` turns the blocked row into a `direct` allow with `engine=degraded`, generation completes, and the run exits `0` — the files are written and the reviewer is expected to treat those rows as `audit2allow` output. The flag is the escape hatch for a host that has a loaded policy but no sepolgen; it is not a way to skip the interface question silently. And it cannot reach the other failure mode: when the boolean query itself could not run, `classify()` returns `toolchain_required` before it ever looks at the flag, so the exit stays `1` — that is fixture `07-toolchain-required`, whose `boolean_mock.json` reports the lookup as unavailable.
 
 ## forbidden
 
@@ -410,7 +410,7 @@ python3 cli/deterministic_gen.py --explain \
   --allow-needs-review
 ```
 
-Each invocation runs in `repo root` (no SELinux required). The first prints `[    fc_drift] myapp_t → var_lib_t:file {write}` with a restorecon note and exits 0 — compare to `01-mislabeled-var-lib/expected.json`. The second prints `[   forbidden] myapp_t → shadow_t:file {open read}` and exits 1 — compare to `03-shadow-read/case.meta.json`. The third prints `[needs_review] myapp_t → myapp_t:process {execmem}` with the full reviewer note and the proposed rule `→ allow myapp_t self:process execmem;`, then exits 1 — because the note is only a note. Drop `--explain` and pass `--allow-needs-review` and that same line lands in the generated `.te` under a `# Needs review` heading, the run exits 0, and the reviewer is on the hook for the decision the flag recorded.
+Each invocation runs in `repo root` (no SELinux required). The first prints `[    fc_drift] myapp_t → var_lib_t:file {write}` with a restorecon note and exits 0 — compare to `01-mislabeled-var-lib/expected.json`. The second prints `[   forbidden] myapp_t → shadow_t:file {open read}` and exits 1 — compare to `03-shadow-read/case.meta.json`. The third prints `[needs_review] myapp_t → myapp_t:process {execmem}` with the full reviewer note and the proposed rule `→ allow myapp_t self:process execmem;`, and exits 0 as well — the opt-in flag clears the blocker; what stays behind is the note the reviewer has to weigh. Drop `--explain` and pass `--allow-needs-review` and that same line lands in the generated `.te` under a `# Needs review` heading, the run exits 0, and the reviewer is on the hook for the decision the flag recorded.
 
 
 :::

@@ -55,7 +55,7 @@ Each phase is a single responsibility.
 | **Preprocess** | Extracts source and target types from `scontext`/`tcontext`, parses `denied { ... }` permission sets, merges duplicate AVC lines by tuple, subtracts permissions already covered by the existing `.te`. | `cli/avc_preprocess.py` — `merge_avc_entries`, `subtract_covered`. |
 | **Parse AVC file** | Reads each line, filters by manifest domains, pulls `path="…"` entries into a per-tuple path map and `src=N` entries into a per-tuple port map for `name_bind`. | `cli/deterministic_gen.py` — `parse_avc_file`. |
 | **Classify** | For each net-new need the generator picks a verdict: `fc_fix`, `fc_drift`, `private_port`, `forbidden`, `baseline`, `interface`, `direct`, `toolchain_required`, `boolean`, or `needs_review`. The verdict decides whether to emit an allow rule, a refpolicy macro, a `.fc` line, a `setsebool` command, or to block generation. | `cli/deterministic_gen.py` — `classify` (lines 335–615). |
-| **Render fragment** | Assembles the `.te` body: baseline macro lines and `fc_drift` notes are kept as comments, interfaces and direct allows are emitted as prose `allow` rules, port rules as `allow` lines. | `cli/deterministic_gen.py` — `render_fragment`. |
+| **Render fragment** | Assembles the `.te` body: `needs_review` rows (each with its reviewer note) first, then refpolicy interface calls, module-private `direct` allows, and private-port allows. `baseline` and `fc_drift` findings render nothing here — a `fc_drift` is a `restorecon` job, and a `fc_fix` lands in the `.fc`. | `cli/deterministic_gen.py` — `render_fragment`. |
 | **Merge** | Splices the fragment into the existing `.te` (updating the `policy_module(name, version)` line with `merge_te`), and overlays `.fc` lines via `merge_fc`. | `cli/deterministic_gen.py` — `merge_te`, `merge_fc`, `filter_fc_fix_lines` in `cli/fc_labeling.py`. |
 | **Summarise** | Writes `pr_summary.md`: policy summary, network bindings, file system access, explicit denials maintained, classification audit table per verdict. | `cli/deterministic_gen.py` — `write_pr_summary`. |
 | **Assemble PR** | Folds `pr_summary.md`, the AVC log excerpt, and the merged-base `sesearch` diff into `policy_out/pr_body.md` via the PR template. | `scripts/assemble_pr_body.sh`. |
@@ -85,7 +85,7 @@ The full LLM path lives in `cli/selinux_gen.py` and is opt-in. Its help text rea
                             (use dev_generate_policy.sh + summarize_pr.py)
 ```
 
-The script still refuses `--legacy-full-policy` unless the operator accepts a recorded deviation:
+The script refuses to run at all *without* `--legacy-full-policy`: the flag is what unlocks the deprecated path, and the refusal names the replacements:
 
 ```text
 "  Summary: python3 cli/summarize_pr.py         (optional LLM prose)
@@ -100,7 +100,7 @@ The PR body must carry enough evidence for a reviewer to read each rule and re-r
 
 The `pr_body.example.md` fixture in `docs/examples/pr_body.example.md` shows the shape the assembler produces:
 
-```markdown
+````markdown
 ### 1. Application Context
 - **App Name / Service:** `myapp` (Order Processor)
 - **Target Domain:** `myapp_t`
@@ -129,7 +129,7 @@ type=AVC msg=audit(1730000002.102:502): avc: denied { append create open write }
 - [x] AVC denials collected only from trusted automated test execution
 - [x] `bash scripts/dev_generate_policy.sh --apply` or equivalent CLI run completed
 - [x] No wildcard allows (`allow myapp_t *:*`) or high-privilege domains in `.te`
-```text
+````
 
 Every allow rule in the final diff must correspond to an AVC line the log contains, or to a labeling fix the `.fc` carries. If a reviewer opens `policy_out/pr_body.md` and reads section 4, every rule in section 2.5 should trace back to one of those lines. That is why the assembler pulls an AVC excerpt — not as decoration, but as the access delta that pairs with the generated rule.
 
@@ -137,21 +137,32 @@ Every allow rule in the final diff must correspond to an AVC line the log contai
 
 Two gates catch the generator before it ships:
 
-1. **CI `forbidden-patterns`.** `scripts/validate_forbidden_patterns.sh` runs as a GitHub workflow (`.github/workflows/selinux-policy-ci.yml`). It scans `selinux/*.te` for the same forbidden-target list that the generator carries in `cli/policy_rules.py`: `shadow_t`, `unconfined_t`, `sysadm_t`, and wildcard allows. The generator already ran that check — the same script — so the CI job should be green without surprise failures.
+1. **CI `forbidden-patterns`.** `scripts/validate_forbidden_patterns.sh` runs as a GitHub workflow (`.github/workflows/selinux-policy-ci.yml`). It scans `selinux/*.te` for `shadow_t`, `unconfined_t`, `sysadm_t`, and wildcard allows. That list is *shorter* than the generator's: `cli/policy_rules.py` refuses six target types (adding `security_t`, `selinux_config_t`, `passwd_file_t`), so a hand-written `.te` can pass this gate on a tuple the generator would have refused. The gate is the backstop for edits made outside the generator, not a copy of its rules — read the diff, not just the checkmark.
 2. **CODEOWNERS review.** The PR template labels every submission `security`, `selinux`, `pending-admin-review`. The generator classifies denials; the reviewer classifies trust. A rule that names a private type under the application directory is a green signal; a rule that names a system type is a yellow signal regardless of how many AVC lines produced it.
 
 The generator is not a reviewer. `VERDICT_NEEDS_REVIEW` means the tuple is legitimate but the allow would weaken the domain (`execmem`, `dac_override`, or a foreign `process` transition). It is recorded in `findings.json` and listed in `pr_summary.md` as a security decision, not a labeling miss. It is not written to the `.te` unless `--allow-needs-review` is passed; `--allow-needs-review-perm <perm>` is the narrower form, which admits only the named permissions. Either way the switch is the developer saying: "this AVC proved the rule; I accept the weakening."
 
-`VERDICT_TOOLCHAIN_REQUIRED` blocks generation entirely. The generator refuses a silent raw allow on a base type when `sesearch` cannot confirm a boolean, and `sepolgen` cannot confirm a refpolicy interface. The banner printed on stderr reads:
+`VERDICT_TOOLCHAIN_REQUIRED` blocks generation entirely. The generator refuses a silent raw allow on a base type when `sesearch` cannot confirm a boolean, and `sepolgen` cannot confirm a refpolicy interface. The banner printed on stderr reads (trimmed to its first half — it closes by distinguishing this state from a plain "no interface matched"):
 
 ```text
-SEPOLGEN INTERFACE MATCHING IS NOT AVAILABLE
+================================================================================
+WARNING: SEPOLGEN INTERFACE MATCHING IS NOT AVAILABLE
+================================================================================
+<the diagnose detail line>
 
-Install setools-console, ensure policy is loaded, run sepolgen-ifgen,
-or pass --allow-degraded (not recommended).
+Impact:
+  - Base-type AVCs (e.g. var_log_t, port types) will NOT map to refpolicy macros.
+  - This generator REFUSES raw allows on base types (exit 1) unless you pass
+    --allow-degraded (audit2allow-grade output; not recommended).
+
+Fix on RHEL / CentOS Stream (with SELinux):
+  sudo dnf install -y policycoreutils-devel setools-console
+  sudo sepolgen-ifgen
 ```
 
-`--allow-degraded` records each raw allow as `engine=degraded` in `findings.json`, turns the blocked verdict into a `direct` allow, and lets generation finish; the admin reviewer must treat those rows as `audit2allow` output, not interface-backed policy (chapter 14 has the fixture).
+The per-tuple note printed after `REFUSED:` adds the other half of the story: `sepolgen unavailable — degraded raw allow on base type (--allow-degraded)`, or the same sentence about the boolean check.
+
+`--allow-degraded` records each raw allow as `engine=degraded` in `findings.json`, turns the blocked verdict into a `direct` allow, and lets generation finish — but only where the flag can reach: the sepolgen lookup. When the *boolean* query is the thing that could not run, `classify()` returns `toolchain_required` before it consults the flag, so `--allow-degraded` changes nothing and the run still exits 1 (fixture `07-toolchain-required` is that case). The admin reviewer must treat degraded rows as `audit2allow` output, not interface-backed policy (chapter 14 has the fixture).
 
 ::: why Why the loop is built this way
 If the generator compiled directly and loaded the module on `rhel-prod`, the next stage would be a canary with no soak. If the operator skipped the PR body and ran `semodule -i` from `policy_out/`, the next stage would be a denial response — and chapter 20 handles the 02:00 card. The loop is built so the most dangerous decision (loading a new allow on a live host) is never the same decision that generated the rule. The developer generates a reviewed diff; the admin loads it through a canary. That separation is what the loop buys you.
