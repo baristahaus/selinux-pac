@@ -21,9 +21,11 @@ still `s0`, but the category list is what separates two processes that share a d
 that fit neatly inside this chapter do not need a classified sensitivity field at all; what
 the categories do is give every container a unique key the policy will read per tuple.
 
-This is how RHEL ships the container domain by default. Every process that Podman,
-systemd-nspawn or CRI-O starts carries the type field `container_t` and a level that is
-unique to that container's run. The reference that names it is the RHEL Using SELinux
+This is how RHEL ships the container domain by default. Every process that Podman or CRI-O
+starts carries the type field `container_t` and a level that is unique to that container's
+run. (systemd-nspawn is the odd one out: it applies an SELinux context only when you hand it
+one — `-Z`, or `SELinuxContext=` in a unit — and its own documentation supplies a hand-written
+`svirt_lxc_net_t:s0:c0,c1` rather than assigning `container_t` per run.) The reference that names it is the RHEL Using SELinux
 chapter on container policy — the `container_t` type is the default domain for every container
 on the host, and `udica` can generate a custom policy for a container so it runs under its
 own type instead of sharing `container_t` with every other container on the box
@@ -35,27 +37,31 @@ The whole picture is legible from the host's CLI. Two commands give you every fi
 
 ```bash title="Process labels on the host"
 # ps -eZ | head -n 5
-LABEL                                                 PID USER COMMAND
-system_u:system_r:init_t:s0                             1 root /usr/lib/systemd/systemd
-system_u:system_r:container_runtime_t:s0             8812 root /usr/bin/podman run --rm ...
-system_u:system_r:container_t:s0:c123,c456           9001 root /usr/bin/crun ...
-unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023 8834 root -bash
+LABEL                                                 PID TTY      TIME CMD
+system_u:system_r:init_t:s0                             1 ?     00:00:01 systemd
+system_u:system_r:container_runtime_t:s0             8812 ?    00:00:00 conmon
+system_u:system_r:container_t:s0:c123,c456           9001 pts/0  00:00:00 python3
+unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023 8834 pts/1  00:00:00 bash
 ```
 
-The third field is still the type — that is the enforcement decision. The `s0:c123,c456`
-level is the per-container key. Every `ps -eZ` line on a host running containers will carry
-an `s0:c…` tail that is unique to that container's session; that is how the host tells them
+The third field is still the type — that is the enforcement decision. Note which process holds
+which label: the runtime's own helpers (`podman`, `conmon`, `crun`) run as
+`container_runtime_t`, and it is the container's *payload* — the command you asked for — that
+carries `container_t` with the per-run category pair. Only those payload lines end in an
+`s0:c…` tail; that tail is the per-container key, and it is how the host tells two containers
 apart.
 
 The corresponding look for files — Chapter 3 covers this exactly — is:
 
 ```bash title="File labels on the host"
-# ls -Z /var/lib/containers/storage | head -n 5
--rw-------. root root system_u:object_r:container_file_t:s0-s0:c0.c1023 storage.tar
+# ls -ldZ /var/lib/containers/storage
+drwx------. 17 root root system_u:object_r:container_var_lib_t:s0 /var/lib/containers/storage
 ```
 
-Every file that Podman created inside its working directory also carries an `s0:c…` level,
-because every file inside a container is issued the same category list as the container's
+The top of that tree carries `container_var_lib_t`. Content the container itself writes — a
+bind mount with `:Z`, a volume — carries `container_file_t` with that container's category
+list (`s0:c123,c456` in the example above), because every file inside a container is issued
+the same category list as the container's
 process. That is why the categories are the isolation: a file owned by container A and a
 process owned by container B are locked each other out at the kernel decision, even when
 both hold the same type field.
@@ -91,7 +97,7 @@ decision worth writing down.
 | Option | What it is for | Why it is a decision |
 |---|---|---|
 | `--security-opt label=type:<type_t>` | run the container under a *custom* process type (e.g. the module produced by `udica`) | the host's container domain no longer applies; an audit reads the new type and must decide whether that type's rules still hold |
-| `--security-opt label=disable` | turn off label separation between containers (e.g. a sidecar that must share another container's files) | *both* containers share the same level; every file each container wrote is visible to every other container on the same host |
+| `--security-opt label=disable` | turn off label separation for the container — from other containers *and* from the host | the container is no longer confined against host content at all: a leaked `/run`, a bind-mounted home directory, any host file the container can reach is fair game. For sharing between two containers the narrower options are `--security-opt label=level:s0:c100,c200` (both containers join one level) or `:z` on the shared mount |
 | `--privileged` | full root-equivalent capabilities inside the container | the container also stops transitioning into the `container_t` domain — every check the chapter is about goes away |
 
 Each is the deliberate answer to a real question — a sidecar needs to reach a file,
@@ -112,9 +118,11 @@ the ticket later should be able to point at the row that says *why the key was r
 ## Kubernetes and CRI-O
 
 Kubernetes reaches the container runtime with a `securityContext` block on each Pod.
-The field that carries SELinux is `seLinuxOptions`, and it carries two values: the *type*
-and the *level*. The runtime — CRI-O on RHEL-based distributions, containerd on the rest —
-receives those values and passes them to the kernel when it starts each container.
+The field that carries SELinux is `seLinuxOptions`, and it has four fields — `user`, `role`,
+`type` and `level`. This chapter is about the last two: the *type* and the *level*. (The first
+two are the ones the Restricted standard forbids outright, so an audit looks for them too.)
+The runtime — CRI-O on RHEL-based distributions, containerd on the rest — receives those
+values and passes them to the kernel when it starts each container.
 
 | Field | What it controls | Where it lives |
 |---|---|---|
@@ -123,9 +131,12 @@ receives those values and passes them to the kernel when it starts each containe
 
 The Kubernetes documentation notes that under the **Restricted** Pod Security Standard the SELinux *type* is a restricted field: it may be undefined or one of the allowed container types — `container_t`, `container_init_t`, `container_kvm_t`, `container_engine_t` — while a custom SELinux user or role is forbidden outright. The *level* is not restricted, so users may still supply it. In practice the type is the platform's `container_t` and the *level* is the per-Pod category ([Pod Security Standards, SELinux row](https://kubernetes.io/docs/concepts/security/pod-security-standards/)).
 
-The runtime's default is usually the right answer: every container on the node receives a
-unique level from the scheduler, each Pod's namespace is still a stranger to every other
-Pod on the node, even when all Pods share the same type.
+The runtime's default is usually the right answer. Kubernetes' scheduler only decides *which
+node* a Pod lands on; the SELinux label is composed on the node by the container runtime
+(CRI-O or containerd), which allocates a random MCS category pair when the Pod does not supply
+a `level`. The isolation is therefore node-scoped: two Pods on the same node get different
+categories, and two Pods on different nodes may well get the same ones — they are not a
+cluster-wide namespace, and they are not a substitute for the network policy between nodes.
 
 ## The consequence for policy authoring
 
@@ -136,14 +147,19 @@ does not inherit that allow chain — every request it makes against a host file
 by the generic container policy.
 
 That is the shape of "policy as code" for containers: policy for the runtime — the
-`container_t` allows that ship with every container image — plus, where a container needs
-something specific, a custom type for the container image. `udica` reads the image's
-metadata and writes that custom type's allow chain, and the container then runs under the
-new type rather than `container_t`. The operator owns the new type's review, just as they
-own the host application's review.
+`container_t` allow chain, which ships with the *host* in the `container-selinux` package and
+is loaded on the host, not baked into any image — plus, where a container needs something
+specific, a custom type of its own. `udica` writes that custom type: it inspects a **running**
+container's JSON (`podman inspect` into `udica -j container.json`) and emits allowed
+capabilities, mounts and ports as rules, with the container's own type named `<name>.process`.
+The container then runs under that type (`--security-opt label=type:<name>.process`) rather
+than `container_t`, and the operator owns its review, just as they own the host application's
+review. Note the type's spelling — `container_t` is a `_t` type, `udica`'s output is a
+`.process` type; pass whichever one you actually generated.
 
-Chapter 1 showed the outage: *a container on the build host masks a denial on the build
-host*; *because the container hides it, staging is permissive*. That is the same trap
+Chapter 1 showed the mechanism: *because the container hides it, staging is permissive*.
+Here is the same trap on the container path, with the build host added: a container on the
+build host masks a denial on the build host. That is the same trap
 revisited on the container path. On the build host the container runs as `container_t` and
 every request it makes against host paths is covered by the generic container policy — the
 path change that breaks the systemd unit on production is still a path change against a
@@ -161,11 +177,11 @@ host's domain is still the one that decides.
 | MCS categories (`s0:c123,c456`) | each container's files and processes as a stranger to every other container on the host | each container takes a per-run category list that the policy has to know about | every container on every host, automatically |
 | `:z` on a bind mount | the path carries a shared content label — every container that mounts it can read and write | the host path's label is rewritten for all containers; a host service that also uses the path will inherit the new label | a directory used by several containers and no host service |
 | `:Z` on a bind mount | the path carries a private, unshared label — only this one container can use it | the host path is locked to that container; a second container, and any host service, is denied | a directory used by exactly one container |
-| `--security-opt label=type:<type_t>` | a custom process type that bypasses the generic `container_t` policy | you now own the allow chain for that type; every access the type makes is your audit | a container with a need to reach a specific type — usually via `udica` |
-| `--security-opt label=disable` | both containers share the same level — each can read the other's files | every file each container wrote is visible to every other container on the host | a sidecar pattern that must share another container's file tree |
+| `--security-opt label=type:<type>` | a custom process type that bypasses the generic `container_t` policy | you now own the allow chain for that type; every access the type makes is your audit | a container with a need to reach a specific type — usually via `udica`, whose generated types end in `.process` |
+| `--security-opt label=disable` | no label separation at all — not between containers, and not between the container and the host | the container's files and the host's files are one pool as far as SELinux is concerned | almost never; prefer `label=level:` or `:z` when the goal is sharing between containers |
 | `--privileged` | full root-equivalent capabilities inside the container, and no transition into `container_t` | every check the chapter is about goes away | an operator need that no less-powerful option satisfies |
 | `seLinuxOptions.type` | the process type for each Pod on the cluster — usually `container_t` | the platform picks the type; only the operator can supply one for a workload | every Pod, by default; supply one only when you own the allow chain |
-| `seLinuxOptions.level` | the category list for each Pod on the cluster — the scheduler picks each | each Pod's level is unique — each Pod's files are a stranger to every other Pod | every Pod; accept the default unless you need a cross-Pod share |
+| `seLinuxOptions.level` | the category list for the Pod, composed by the container runtime on the node it lands on | each Pod's level is unique *on that node* — its files are a stranger to the other Pods there | every Pod; accept the default unless you need a cross-Pod share |
 
 ## What you can do now
 
@@ -175,8 +191,10 @@ host's domain is still the one that decides.
   is also used by a host service — and `:Z` is wrong for shared storage.
 - **Record** each use of `--security-opt label=disable`, `--security-opt label=type:...`
   and `--privileged` as a row in the inventory with the reason, not a footnote.
-- **Audit** a Kubernetes Pod's `seLinuxOptions` and confirm that every Pod on every node
-  carries a unique level — that is the isolation that names the platform's default.
+- **Audit** a Kubernetes Pod's `seLinuxOptions`: confirm `user` and `role` are unset, and
+  that `type`, if set at all, is one of the allowed container types. Then look at the node:
+  two Pods on the same node must not share a category pair (`ps -eZ | grep container_t`) —
+  that per-node uniqueness is the isolation the platform gives you by default.
 - **Review** the container policy you are shipping against: it is the host module, plus a
   custom type for the container image, plus a decision about `container_t` or not.
 
@@ -191,9 +209,13 @@ system_u:system_r:container_runtime_t:s0          8812 root   /usr/bin/conmon --
 
 ```bash title="Compare :z versus :Z on a bind mount"
 # ls -Z /tmp/shared          # before mount: your host's label
-# podman run --volume /tmp/shared:/data:Z alpine ls -Z /data
+# podman run --volume /tmp/shared:/data:Z fedora:41 ls -Z /data
 # ls -Z /tmp/shared          # after :Z mount: you see the new label
 ```
+
+(Use a Fedora or UBI image for that second line. BusyBox `ls` — the one in `alpine` — is built
+without SELinux support and refuses `-Z`, so the container-side listing fails on the option
+rather than showing you a label.)
 
 The `:Z` line shows the file's label rewritten *only* for this container.
 The same sequence with `:z` would show it rewritten for every container that shares the level.
