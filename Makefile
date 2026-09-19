@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 
 PYTHON ?= python3
-PIP ?= pip3
+PIP ?= $(PYTHON) -m pip
 
 .PHONY: help deps test check lint fixtures test-smoke test-static test-manifest \
 	test-rpm test-forbidden test-version test-fixtures test-blast-radius \
@@ -18,7 +18,11 @@ help: ## List targets (default)
 	@echo "Quick start:  make deps && make check"
 
 deps: ## Install Python deps for offline tests (no network after first run)
-	$(PIP) install -q -r cli/requirements.txt
+	@if $(PIP) --version >/dev/null 2>&1; then \
+		$(PIP) install -q -r cli/requirements.txt; \
+	else \
+		echo "make: $(PIP) unavailable \u2014 skipping dependency install; install cli/requirements.txt yourself"; \
+	fi
 
 test: deps test-fixtures test-static test-smoke ## Offline health check (no SELinux host required)
 	@echo "make test OK"

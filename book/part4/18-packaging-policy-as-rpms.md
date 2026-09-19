@@ -15,7 +15,7 @@ The practical differences are:
 
 | Property | `scp` + `semodule -i` | RPM |
 |----------|----------------------|-----|
-| Reproducibility | "it compiled once on the box I remember" | `rpmbuild` rebuilds to identical artifact from identical source + `modver` |
+| Reproducibility | "it compiled once on the box I remember" | the same source and the same `policy_version.txt` give the same `modver`, the same NVR, and the same compiled `.pp` on any build host — the RPM's own bytes vary with the build host and its timestamps; the artifact's identity does not |
 | Versioning | manual, fragile | `%{modver}` derived from `selinux/<app>/policy_version.txt` — single source of truth |
 | Rollback | "unload and hope nothing broke" | `rpm -e` triggers `%postun`; downgrade installs older `.pp` |
 | Install surface | every SSH key on the host | `dnf` against the internal repo, key-trusted |
@@ -71,11 +71,11 @@ The `%postun` scriptlet removes the module only on an explicit erase — `if [ $
 1. Verifies `rpmbuild` is available. If it is not (e.g. on macOS), the script defers to `scripts/build_rpms_on_dev.sh`, which SSHes into `rhel-qa` (`DEV_HOST` defaults to `192.168.64.6`) and runs the build remotely, then `rsync`-copies the RPMs back to `dist/` on the controller.
 2. Reads the version from `selinux/policy_version.txt` for `myapp` and from `selinux/shopapi/policy_version.txt` for `shopapi` — via `scripts/lib/version.sh` (`policy_version` helper) and stashes it into `--define "modver …"`. The spec does not hardcode its version; the text file is the single source of truth.
 3. Builds the `%prep` tree: copies scripts into `rpmbuild/BUILD/selinux-policy-ops-src/lib/`, the CLI under `lib/pac_cli/`, and the per-app `.pp`/`.te`/`.fc`/manifest into `SOURCES/`.
-4. Calls `scripts/validate_rpm_ops_parity.sh` before each build.
+4. Calls `scripts/validate_rpm_ops_parity.sh` once, up front — the same check is also the whole run when `rpmbuild` is absent. It guards the `selinux-policy-ops` source allowlist, not the per-app specs.
 5. Calls `scripts/compile_and_validate.sh` against the source trees, then runs `rpmbuild -ba` for each spec in turn.
 6. Copies every produced `.rpm` into `dist/` and lists it.
 
-What it requires on the host: `rpmbuild`, the SELinux policy toolchain (`make` / `checkmodule` / `semodule_package`), and `scripts/lib/version.sh` reachable from the workspace root. If `rpmbuild` is missing and `BUILD_RPMS_LOCAL` is not set, it falls through to the remote-dev path.
+What it requires on the host: `rpmbuild`, the SELinux policy toolchain (`make` / `checkmodule` / `semodule_package`), and `scripts/lib/version.sh` reachable from the workspace root. If `rpmbuild` is missing the driver branches: on macOS it execs `scripts/build_rpms_on_dev.sh` — compile and pack on rhel-qa, copy `dist/*.rpm` back — unless `BUILD_RPMS_LOCAL=1`; on Linux it prints `Note: rpmbuild not found; validating spec parity only`, runs the parity check, and exits 0.
 
 ## Publishing
 
@@ -131,7 +131,7 @@ This table summarises the lifecycle each artefact lives under:
 
 | Artifact | Built by | Installed where | Updated by | Rolled back by |
 |----------|----------|-----------------|------------|----------------|
-| `selinux-policy-ops` RPM | `packaging/build_rpms.sh` on rhel-qa (or controller via `build_rpms_on_dev.sh`) | every production host (`ansible.builtin.dnf: name: selinux-policy-ops`) | `rpm -U` against the internal repo | `rpm -e` → `%postun` wipes the scripts |
+| `selinux-policy-ops` RPM | `packaging/build_rpms.sh` on rhel-qa (or controller via `build_rpms_on_dev.sh`) | every production host (`ansible.builtin.dnf: name: selinux-policy-ops`) | `rpm -U` against the internal repo | `rpm -e` — the RPM owns those files, so erase removes them; the ops spec has no scriptlets |
 | `<app>-selinux` RPM | `packaging/build_rpms.sh`, `modver` from `policy_version.txt` | only the host running that app | `rpm -U` after each PR that bumps `policy_version.txt` | `rpm -e` → `%postun` unloads module, drops ports |
 | `policy_version.txt` | `selinux/<app>/` in each app repo | never on prod | git PR on the app repo | git revert, paired with `rpm` rebuild |
 | Signed RPM payload | `packaging/publish_internal.sh` with `SELINUX_GPG_NAME` (`rpmsign --addsign`) | `dist/*.rpm` before publish | the RPM repo mirrors the signed artefact | publish the previous NVR again (`dnf downgrade` on the host) |

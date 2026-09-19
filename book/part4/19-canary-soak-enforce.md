@@ -32,7 +32,7 @@ point, and each stage is a playbook that either passes or fails closed.
 one starts. That is what makes a canary a canary: the blast radius of a bad module is one host,
 and the operator sees the first host's result before the fleet moves.
 
-The role's `canary.yml` does six things in order, and every one of them is a task you can read:
+The role's `canary.yml` does these things in order, and every one of them is a task you can read:
 
 1. **Disable `dontaudit` for the soak window** — a host-wide change, so that a denial which policy
    deliberately kept quiet cannot hide from the soak.
@@ -43,14 +43,21 @@ The role's `canary.yml` does six things in order, and every one of them is a tas
    domain only. The host stays enforcing; the application logs instead of blocking.
 4. **Label and verify paths** — ensure the application directories exist, `restorecon` them, and
    then *verify* the contexts before any service restarts.
-5. **Restart and probe** — reset systemd failure counters, restart the application services, and
-   run the unified endpoint smoke: `wait_for_endpoints.sh` against the manifest's endpoints,
-   with the probe host from the inventory (`http_probe_host`) and the retry window baked into
-   the task (`--retries 15 --delay 2`). Lengthening that window today means editing
-   `ansible/roles/selinux_pac/tasks/canary.yml`, not the inventory.
-6. **Record the clock and the report** — write the canary timestamp to the soak marker
-   (`soak_marker_file`, by default `<var_dir>/selinux_canary_deployed_at`) and produce a deploy
-   report at `<var_dir>/selinux_deploy_report.json`.
+5. **Record the clock** — write the canary timestamp to the soak marker (`soak_marker_file`,
+   by default `<var_dir>/selinux_canary_deployed_at`). This runs *before* the restart on purpose:
+   the marker is the left edge of the AVC window that step 7 reads, so the restart's own denials
+   are inside it.
+6. **Restart and probe** — reset the systemd failure counters, restart the application services,
+   `restorecon` the runtime directory, then run the unified endpoint smoke:
+   `wait_for_endpoints.sh` against the manifest's endpoints, probing `http_probe_host` from the
+   retry window baked into the task (`--retries 15 --delay 2`). Lengthening that window today
+   means editing `ansible/roles/selinux_pac/tasks/canary.yml`, not the inventory.
+7. **Read the fresh window** — `monitor_avc.sh --marker-file <that marker>` prints the raw and
+   net-new counts for everything since the clock started; thresholds are `canary_max_avc` and
+   `canary_max_net_new`, and exceeding either drops the block into its `rescue` (`semodule -B`,
+   then a failed run).
+8. **Write the report** — `post_deploy_report.sh --phase canary` produces the deploy report at
+   `<var_dir>/selinux_deploy_report.json`, the artifact the soak gate later reads.
 
 The marker is the anchor for everything that follows: `ausearch` windows, `days_elapsed`, and the
 "what changed since canary" question at 02:00.
@@ -157,11 +164,11 @@ ansible-playbook -i ansible/inventory.production.yml ansible/soak_status.yml --l
 `soak_status.yml` runs `collect_soak_facts.sh` and prints days elapsed, raw AVCs since the marker,
 net-new count with its `fail_closed` flag, and the deploy report gate. Nothing on the host changes.
 
-On a lab inventory, dry-run the canary instead:
-
-```bash
-ansible-playbook -i ansible/inventory.dev.yml ansible/deploy_canary.yml --check
-```
+The canary has no useful `--check` mode: half of its tasks are `command`/`shell`, Ansible skips
+those in check mode, and the very next task parses their `stdout` — so `--check` ends in the
+block's `rescue` with `Canary deploy failed`. To review the plan without touching a host, use
+`ansible-playbook -i ansible/inventory.dev.yml ansible/deploy_canary.yml --list-tasks`; to
+exercise it, run it for real against a lab inventory.
 :::
 
 ## How to read a soak result

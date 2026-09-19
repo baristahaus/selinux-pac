@@ -74,13 +74,13 @@ Two drift directions each produce an error:
 
 The script iterates every `policy_version.txt` under `selinux/` (each per-application module has its own under `selinux/<module>/`); the root-level `selinux/policy_version.txt` is the default for the top-level `myapp` module. It also verifies the single `define "modver ${VERSION}"` entry in `packaging/build_rpms.sh` — if that line is missing, the whole RPM pipeline is broken.
 
-**How to fix a failure:** align the version in `.te` to the line in `policy_version.txt`, or replace a hardcoded `Version:` in the spec with `Version: %{modver}`. If a module is missing its `policy_version.txt`, the script reports that first.
+**How to fix a failure:** align the version in `.te` to the line in `policy_version.txt`, or replace a hardcoded `Version:` in the spec with `Version: %{modver}`. Note the loop's shape: it walks the `policy_version.txt` files that exist, so a module directory with no version file is skipped, not flagged. Give every module directory a `policy_version.txt` and the check covers it from then on.
 
 ## Blast-radius tiering
 
 Soak duration is not uniform. A module that adds one rule on a module-private type needs 1 day of soak; a rule on a refpolicy interface or a non-module target type needs 3; an entrypoint change or a direct allow on a base-policy type needs 7.
 
-`scripts/classify_policy_blast_radius.sh` computes each of those three tiers from a pair of compiled `.pp` files: a base (`git merge-base`'s policy) and a candidate. The two-stage pipeline is:
+`scripts/classify_policy_blast_radius.sh BASE CANDIDATE` computes each of those three tiers from two policy files given as explicit paths — compiled `.pp` files, or `.te` files that it compiles in place — one base and one candidate. Resolving the base from `git merge-base` is the caller's job: `scripts/lib/policy_module_diff.sh --from-merge-base` does it for the PR comment, and `check_soak_ready.sh --auto-tier` takes `--base-policy` and `--candidate-policy`. The two-stage pipeline is:
 
 1. `scripts/lib/blast_radius_collect.sh` installs each `.pp` into a fresh [`policy_isolated_store.sh`](repo:scripts/lib/policy_isolated_store.sh) prefix — a `mktemp -d` copy of `/var/lib/selinux/targeted`, never touching the live policy — and runs `sesearch --allow -s <domain>` plus `sesearch -T` on each. It filters both by the module's domains, `comm -23` diffs the allow and type lines, and produces `added_all.txt` with the new lines from the candidate.
 2. `scripts/lib/blast_radius_classify.py` parses each added line. The parser carries a small fixed vocabulary: `BASE_TARGET_TYPES` (`var_t`, `etc_t`, `usr_t`, `bin_t`, `shadow_t`, `unlabeled_t`, `tmp_t`, `proc_t`, `sysfs_t`); `TYPE_RULE_PREFIXES` (`type_transition`, `type_change`, `type_member`, `role_transition`, `range_transition`); a regular expression that matches the `allow source target:tclass { perms };` form. The tier logic is `TIER_RANK = {"low": 0, "medium": 1, "high": 2}` with `TIER_DAYS = {"low": 1, "medium": 3, "high": 7}`. A rule is scored as:
@@ -100,7 +100,7 @@ bash scripts/lib/policy_module_diff.sh \
   --app-name <app> --from-merge-base --cand-dir selinux --output /tmp/diff.md --format markdown
 ```
 
-The diff script [`scripts/lib/policy_module_diff.sh`](repo:scripts/lib/policy_module_diff.sh) compiles both sides (base from the git merge-base, candidate from `selinux/`), installs each compiled `.pp` into its own isolated store, runs `sesearch` per domain on each, diffs the allow and type lines with `comm`, and emits a markdown file with **Rules ADDED** and **Rules REMOVED** for the app domains.
+The diff script [`scripts/lib/policy_module_diff.sh`](repo:scripts/lib/policy_module_diff.sh) compiles both sides (base from the git merge-base, candidate from `selinux/`), installs each compiled `.pp` into its own isolated store, runs `sesearch --allow` per domain on each, diffs the two allow dumps with `comm`, and emits a markdown file with **Rules ADDED** and **Rules REMOVED** for the app domains. It diffs *allow rules only* — the type lines are the blast-radius collector's job, in the next section.
 
 `post_pr_policy_diff_comment.sh` wraps that output inside a markdown comment marker (`<!-- selinux-policy-module-diff -->`), calls `gh api` against `repos/<repo>/issues/<PR>/comments` to locate any existing comment bearing that marker, and either `PATCH`s it or `gh pr comment <PR>` opens a fresh one. The whole thing requires the GitHub Actions context (`GITHUB_REPOSITORY`, `GITHUB_EVENT_PATH`); it refuses to run outside.
 
@@ -192,8 +192,11 @@ $ bash scripts/validate_version_consistency.sh
 validate_version_consistency: payments OK (1.0.0)
 validate_version_consistency: myapp OK (1.1.3)
 validate_version_consistency: shopapi: /path/to/selinux-pac/selinux/shopapi/policy_version.txt (1.0.0) != policy_module in /path/to/selinux-pac/selinux/shopapi/shopapi.te (0.0.999)
+validate_version_consistency: shopapi OK (1.0.0)
 $ git checkout -- selinux/shopapi/shopapi.te
 ```
+
+(That trailing `OK` after an error is the script's own shape — it always prints the module line and counts the error; the exit code does the gating.)
 
 It exits 1, and the message names both files by absolute path. `git checkout` restores the real version; run the check once more and both gates pass again. Both checks are one command each, and they are the same commands CI runs.
 :::

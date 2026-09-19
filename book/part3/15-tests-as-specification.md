@@ -110,19 +110,19 @@ The top-level `Makefile` is the single entry point for all verification. The tar
 
 A green `make test` is the proof of the decision. A green `make check` is the proof of the whole repo. Neither needs a SELinux host.
 
-The target definitions above are real — every command quoted above is in the repo's `Makefile` today. The full target block reads:
+The target definitions above are real — every command quoted above is in the repo's `Makefile` today. The target lines read (only the fixture recipe is shown; `make help` prints exactly these comments):
 
 ```make
-test: deps test-fixtures test-static test-smoke ## Offline health check
-check: test lint book-check ## Full repo health
-fixtures: test-fixtures ## Deterministic + payments + blast-radius + tune-report fixtures only
+test: deps test-fixtures test-static test-smoke ## Offline health check (no SELinux host required)
+check: test lint book-check ## Full repo health: offline tests + linters + book links
+fixtures: test-fixtures ## Deterministic + payments + blast-radius fixture suites only
 test-fixtures: ## Golden deterministic, payments + blast-radius + tune-report fixtures
 	bash scripts/run_deterministic_fixtures.sh
 	bash scripts/run_deterministic_payments_check.sh
 	bash scripts/run_blast_radius_fixtures.sh
 	bash scripts/run_tune_report_fixtures.sh
-test-static: test-forbidden test-version test-rpm test-manifest ## Shell validators
-test-smoke: deps ## Python smoke_test.py
+test-static: test-forbidden test-version test-rpm test-manifest ## Shell validators (offline)
+test-smoke: deps ## Python smoke_test.py (offline; no SELinux host)
 ```
 
 ## How each neighbouring suite protects
