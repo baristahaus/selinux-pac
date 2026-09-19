@@ -1179,13 +1179,13 @@ def check(book: Book, book_dir: Path):
 def serve(out_root: Path, port: int) -> None:
     import functools
     import http.server
-    import socketserver
 
     handler = functools.partial(
         http.server.SimpleHTTPRequestHandler, directory=str(out_root)
     )
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("127.0.0.1", port), handler) as httpd:
+    # Threaded: a browser that holds a connection open (a paused tab, a slow image)
+    # must not block every other request.
+    with http.server.ThreadingHTTPServer(("127.0.0.1", port), handler) as httpd:
         print(f"book: serving http://127.0.0.1:{port}/ (Ctrl-C to stop)")
         try:
             httpd.serve_forever()
