@@ -77,7 +77,7 @@ The playbook is [`repo:ansible/emergency_rollback.yml`](ansible/emergency_rollba
 | **10. Deploy report** | `Write rollback deploy report when ops available` — `post_deploy_report.sh` with `phase rollback` | The paper trail — marker, domain, policy version. |
 | **11. Soak clock reset** | `Record rollback timestamp` — `date +%s > {{ soak_marker_file }}` | **The clock is reset.** Soak starts over from zero. This is why shape B's timeline is longer than shape A's. |
 
-The operator must supply two things. The **domain name** comes from the inventory (`hosts.all.selinux_pac.domain`). The **RPM downgrade version** is the only value the playbook needs — `rollback_dnf_version` — and it is the optional branch. Without it, only step 1 runs and that is enough.
+The operator must supply two things. The **domain name** comes from the inventory (`hosts.all.selinux_pac.domain`). The **RPM downgrade version** is the only value the playbook needs — `rollback_dnf_version` — and it is the optional branch. Without it, the downgrade step is skipped — every other step still runs, and the permissive relief from step 1 is what restores service immediately.
 
 ### What each step restores, plainly
 

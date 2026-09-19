@@ -90,7 +90,7 @@ Each report type answers a different question about the same log.
 |--------|-----------------|
 | **`aureport --avc`** | *Which AVCs fired, in order?* — one row per event, with the subject and the target. |
 | **`aureport --summary`** | *How much did the policy block in total?* — the main summary report, with a `Number of AVC's` line. |
-| **`aureport --failed`** | *Which syscalls failed, and what was the target?* |
+| **`aureport --failed`** | *Which syscalls failed, and by which process?* — great for finding a service that fails quietly rather than visibly |
 
 The soak path does its own counting, per domain rather than in total: `scripts/lib/avc_query.sh` converts the marker's epoch with `avc_epoch_to_ts` (epoch seconds are not a valid `-ts` value) and then runs `ausearch --input-logs -m AVC,USER_AVC,SELINUX_ERR,USER_SELINUX_ERR -ts "<MM/DD/YYYY HH:MM:SS>" --subject <domain> --format raw`, counting the `type=AVC` lines. **That** is the number the soak gate compares against the marker's deploy epoch — `aureport` is for reading, not for gating.
 
