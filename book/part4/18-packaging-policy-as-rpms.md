@@ -9,7 +9,7 @@ SELinux policy is code. It is also the single source of truth for what processes
 1. **A compiled `.pp` copied into `/var/lib/selinux/targeted/custom/`** — reachable by anyone who SSH-in-ed, loaded with `semodule -i`, never auditable, never roll-backable.
 2. **A signed RPM that installs the `.pp`, registers ports and labels, and pulls the policy back on the next boot** — reachable by `dnf`, audit-tracked, downgrade primitive.
 
-The rule that production hosts do not carry the repository (see `docs/admin/203-RHEL_TWO_HOST.md` and `docs/admin/304-ADOPTION_CHECKLIST.md` — "production host: no git clone; `selinux_ops_from_package: true`") exists for a reason. If policy reaches the host as a tarball of your `selinux/` directory, the chain-of-custody question becomes "who compiled this, from which `.te`, on which box?" If it reaches as an RPM with an in-toto-style signature on `RPM-GPG-KEY`, the chain of custody lives in `rpm -q --qdigest` and in the repo at `SELINUX_RPM_REPO`.
+The rule that production hosts do not carry the repository (see `docs/admin/203-RHEL_TWO_HOST.md` and `docs/admin/304-ADOPTION_CHECKLIST.md` — "production host: no git clone; `selinux_ops_from_package: true`") exists for a reason. If policy reaches the host as a tarball of your `selinux/` directory, the chain-of-custody question becomes "who compiled this, from which `.te`, on which box?" If it reaches as an RPM signed with `SELINUX_GPG_NAME`, the answer is `rpm -Kv dist/*.rpm` (verifies the signature and the package digest) plus `rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE} %{SIGPGP:pgpsig}\n'`, and the repo at `SELINUX_RPM_REPO` keeps the signed artefact.
 
 The practical differences are:
 
@@ -58,10 +58,10 @@ The `%post` scriptlet of each app RPM does three things:
 2. `semanage port -a/-m` — registers each port listed in the manifest with its type (e.g. `shopapi_port_t` on TCP 8091, `myapp_port_t` / `myapp_backend_port_t` on 8888 / 8889).
 3. `|| true` — survives missing `semanage` so the host is not blocked.
 
-The `%postun` scriptlet removes the module only when `%{?_upgrading}` is not set — this is the rollback primitive. If the operator or the playbook issues `rpm -e`, all SELinux state that came with the package is rolled back.
+The `%postun` scriptlet removes the module only on an explicit erase — `if [ $1 -eq 0 ]` is true for `rpm -e` and false for `rpm -U`. This is the rollback primitive. If the operator or the playbook issues `rpm -e`, all SELinux state that came with the package is rolled back.
 
 :::: note The %postun conditional
-`%{?_upgrading}` is an RPM macro that resolves to `1` during `rpm -U` and is empty during `rpm -e`. The `if [ $1 -eq 0 ]` form is the standard idiom: uninstall only on explicit removal, not on upgrade.
+`$1` in a scriptlet is the number of instances of the package that will remain after the transaction: `0` on erase, `1` or more on upgrade. So `if [ $1 -eq 0 ]` uninstalls the module only when the package is really going away — during an upgrade the module is left to be replaced by the new `%post`. There is no `%{?_upgrading}` macro here; the numeric argument is the idiom.
 ::::
 
 ## Building RPMs
@@ -88,23 +88,24 @@ SELINUX_RPM_REPO=/var/www/html/selinux-pac
 SELINUX_GPG_NAME=selinux-pac
 ```
 
-The playbook on the controller reads this env, and the generated `.repo` snippet (shown by the script's `cat <<EOF` block) is what each RHEL host installs against: a `[selinux-pac]` section on `baseurl=https://yum.example.internal/selinux-pac`, `gpgcheck=1`, keyed by `RPM-GPG-KEY`.
+`packaging/publish_internal.sh` reads this env, signs the artefact, and prints the `.repo` snippet you place on each RHEL host: a `[selinux-pac]` section on `baseurl=https://yum.example.internal/selinux-pac`, `gpgcheck=1`, keyed by `RPM-GPG-KEY`. Nothing under `ansible/` reads this file — the playbooks install from whatever repo the inventory's hosts are already configured against, so the `.repo` file is an admin step, not a playbook step.
 
-:::: try Inspect a spec from your own box
+::: try Inspect a spec from your own box
 On `rhel-qa` (or any host with `rpm-build`) — and only if `rpmbuild` is installed, otherwise say so explicitly rather than pretending:
 
 ```bash
 $ rpm -q --specfile /home/ansible/selinux-pac/packaging/shopapi-selinux.spec
 ```
 
-If `rpmbuild` is not on your controller (macOS), run the parity check directly instead:
+Without `rpmbuild`, `packaging/build_rpms.sh` takes a shortcut — and which shortcut depends on the host. On Linux it prints `Note: rpmbuild not found; validating spec parity only`, runs the parity script, and exits 0. On macOS it `exec`s `scripts/build_rpms_on_dev.sh`, which rsyncs to the dev host and builds there. Neither is what you want if you only want to read the spec: the parity script is its own command.
 
 ```bash
-$ bash packaging/build_rpms.sh   # triggers validate_rpm_ops_parity.sh
+$ bash scripts/validate_rpm_ops_parity.sh
+OK selinux-policy-ops sources match packaging spec allowlist
 ```
 
-The parity script (`scripts/validate_rpm_ops_parity.sh`) is the single most useful sanity check on the ops package: it enumerates every script in `scripts/` that the `selinux-policy-ops.spec` must declare, and then greps the spec file for each one. If a source exists but the spec does not name it, or a spec names a file that is missing, the script exits non-zero. That is the only guard against your playbooks depending on a script that never shipped in the RPM.
-::::
+The script is the single guard on the ops package: it holds a fixed allowlist of the scripts and `scripts/lib` files that `selinux-policy-ops.spec` must declare, and it fails loudly when a listed source is missing from the tree or from the spec (`MISSING source: …`, `SPEC missing script: …`). It is an allowlist, not a discovery pass — a script you add to `scripts/` is not covered until you add it to the list *and* the spec.
+:::
 
 ## Versioning and upgrades
 
@@ -112,14 +113,15 @@ The module version travels with the RPM as `%{modver}`. It is not chosen by the 
 
 What an upgrade does:
 
-1. `%post` loads the new `.pp` alongside the already-loaded one (`%selinux_modules_install` does not unload the prior version — the policy engine treats this as a rule add).
+1. `%post` installs the new `.pp` (`%selinux_modules_install` runs `semodule -i`) — the policy store keeps **one module per name**, so the new ruleset replaces the old in place. No `semodule -r` is needed and none is run.
 2. `semanage port -m` updates each port type to the new mapping declared by the manifest.
 3. `%posttrans` re-applies relabels (`%selinux_relabel_post`) so the on-disk state matches the new policy.
 
 What a downgrade does:
 
-1. `rpm -U` with an older NVR loads the older `.pp` on top of the new one (the policy engine keeps both until you reload or reboot; in practice, operators pair downgrade with a `systemctl reload` of every affected service to drop the newer rules).
+1. `dnf downgrade` (or `rpm -Uvh --oldpackage`) runs the older package's `%post`, which installs the older `.pp` over the newer one — the same in-place replace. There is no window where two versions of the module are loaded, and nothing to reload afterwards for the rules to change.
 2. `rpm -e` triggers `%postun`, which unloads the module and drops the ports — the rollback primitive referenced in Chapter 20.
+3. `dnf history rollback` undoes the whole transaction, policy and packages together, when the operator wants the host back at an earlier exact state.
 
 The rollback primitive is not theoretical: a mis-compiled `.pp` that grants `write` on `shadow_t` can be fully rolled back, the policy un-loaded, the ports deregistered, and a new NVR built — all from `dnf`, without touching the box's policy database by hand.
 
@@ -132,7 +134,7 @@ This table summarises the lifecycle each artefact lives under:
 | `selinux-policy-ops` RPM | `packaging/build_rpms.sh` on rhel-qa (or controller via `build_rpms_on_dev.sh`) | every production host (`ansible.builtin.dnf: name: selinux-policy-ops`) | `rpm -U` against the internal repo | `rpm -e` → `%postun` wipes the scripts |
 | `<app>-selinux` RPM | `packaging/build_rpms.sh`, `modver` from `policy_version.txt` | only the host running that app | `rpm -U` after each PR that bumps `policy_version.txt` | `rpm -e` → `%postun` unloads module, drops ports |
 | `policy_version.txt` | `selinux/<app>/` in each app repo | never on prod | git PR on the app repo | git revert, paired with `rpm` rebuild |
-| Signed RPM payload | `packaging/publish_internal.sh` with `SELINUX_GPG_NAME` | `dist/*.rpm` before publish | the RPM repo mirrors the signed artefact | `rpm --rollback` against the repo |
+| Signed RPM payload | `packaging/publish_internal.sh` with `SELINUX_GPG_NAME` (`rpmsign --addsign`) | `dist/*.rpm` before publish | the RPM repo mirrors the signed artefact | publish the previous NVR again (`dnf downgrade` on the host) |
 | Internal yum repo | `httpd` / Pulp / Satellite at `SELINUX_RPM_REPO` | each production host's `/etc/yum.repos.d/` | each new `publish_internal.sh` run | repo rotation: the previous NVR stays resolvable |
 
 :::: warn Never install a locally built module on production
@@ -146,7 +148,7 @@ This is the corollary. Every time an RPM is skipped and a `.pp` is loaded by han
 ## What you can do now
 
 - [ ] Inspect `packaging/build_rpms.sh` on rhel-qa — confirm the `rpmbuild` path and the `BUILD_RPMS_LOCAL` escape hatch.
-- [ ] Run `bash scripts/validate_rpm_ops_parity.sh` once and read its output — every line it emits names a script the ops RPM ships.
+- [ ] Run `bash scripts/validate_rpm_ops_parity.sh` once — it exits 0 with a single `OK` line when the allowlist matches, and names the missing file by path when it does not.
 - [ ] Verify every per-app spec names every `.pp` source: `grep -E '^Source[0-9]' packaging/<app>-selinux.spec`.
 - [ ] Bump `policy_version.txt` in your app's `selinux/` directory; rebuild with `packaging/build_rpms.sh`; confirm the new NVR appears in `dist/`.
 - [ ] Point an Ansible controller at your internal repo and run `install_packages.yml` — watch `selinux_ops_from_package: true` flip the decision from `semodule -i` to `dnf`.

@@ -21,7 +21,7 @@ The workflow [`.github/workflows/selinux-policy-ci.yml`](repo:.github/workflows/
 | compare `policy_module(...)` in `.te` to the version line | Execute any RHEL playbook |
 | report pass / fail as a status check | install, load, or remove policy modules |
 
-The companion [`.github/workflows/demo-estate.yml`](repo:.github/workflows/demo-estate.yml) is a different story — it has a `shopapi-policy` job that ships a **Fedora container** with the real toolchain (`selinux-policy-devel`, `checkpolicy`, `policycoreutils`, `setools-console`). That container *does* compile a `.pp` — but it never loads it into a running kernel. It stops at `make`, never touches `audit.log`, never touches production inventory.
+The companion [`.github/workflows/demo-estate.yml`](repo:.github/workflows/demo-estate.yml) is a different story — it has a `shopapi-policy` job that runs in a **`fedora:41` container** and installs the compile toolchain (`dnf install -y selinux-policy-devel make python3`). That container *does* compile a `.pp` — but it never loads it into a running kernel. It stops at `make`, never touches `audit.log`, never touches production inventory. Note what that install list does *not* contain: `setools-console`. The compile path needs no `sesearch`, which is exactly why a missing `sesearch` is a soak-gate condition and not a CI one.
 
 That Fedora job is the *only* place in GitHub Actions that touches the policy toolchain, and every other job stays in bash-only land. That is why a separate file owns the compile path: the policy-compile job needs a `fedora:41` container because `selinux-policy-devel` is a Fedora package; the other jobs do not.
 
@@ -36,11 +36,11 @@ bash scripts/validate_forbidden_patterns.sh selinux
 POLICY_MODULE=shopapi SELINUX_DOMAIN=shopapi_t bash scripts/validate_forbidden_patterns.sh selinux/shopapi
 ```
 
-The first call covers the default `myapp` module on the repo root. The second, parametrised by `POLICY_MODULE` / `SELINUX_DOMAIN`, covers each per-application module directory (`selinux/shopapi`, `selinux/payments`, …) when the generator wrote one.
+The first call covers the default `myapp` module on the repo root. The second, parametrised by `POLICY_MODULE` / `SELINUX_DOMAIN`, covers `selinux/shopapi`. Those two invocations are the whole coverage: `selinux/payments` is tracked in the repository and is *not* passed to the gate, so adding a third module means adding a third line to the job — nothing discovers `selinux/*/` on its own.
 
 `validate_forbidden_patterns.sh` runs on any machine with bash and Python 3 — laptop, CI, rhel-qa, no SELinux host required. It returns 0 only when every test passes; each `check_fail` call prints one specific error and sets `fail=1`.
 
-Twelve refusals in total. Seven are regex checks against the `.te` — six on the shape of an `allow` line, one on a broad `var_t:file` write. One is a loop over the three high-privilege target types. The remaining four are structural: the `require` block (a Python check for custom types declared inside it), a `policy_module()` presence check, a check that the file mentions its own domain, and the `.fc` content check.
+Twelve refusals in total. Seven are regex checks against the `.te` — five on the shape of an `allow` line (wildcard target, wildcard class, fully wildcard, `self:*`, and `bin_t:file … execute`), one on `^module\s+` (the old module declaration a refpolicy `.te` must not use), and one on a broad `var_t:file` write. One is a loop over the three high-privilege target types. The remaining four are structural: the `require` block (a Python check for custom types declared inside it), a `policy_module()` presence check, a check that the file mentions its own domain, and the `.fc` content check.
 
 | # | Pattern (text) | What it refuses |
 |---|---|---|
@@ -84,9 +84,9 @@ Soak duration is not uniform. A module that adds one rule on a module-private ty
 
 1. `scripts/lib/blast_radius_collect.sh` installs each `.pp` into a fresh [`policy_isolated_store.sh`](repo:scripts/lib/policy_isolated_store.sh) prefix — a `mktemp -d` copy of `/var/lib/selinux/targeted`, never touching the live policy — and runs `sesearch --allow -s <domain>` plus `sesearch -T` on each. It filters both by the module's domains, `comm -23` diffs the allow and type lines, and produces `added_all.txt` with the new lines from the candidate.
 2. `scripts/lib/blast_radius_classify.py` parses each added line. The parser carries a small fixed vocabulary: `BASE_TARGET_TYPES` (`var_t`, `etc_t`, `usr_t`, `bin_t`, `shadow_t`, `unlabeled_t`, `tmp_t`, `proc_t`, `sysfs_t`); `TYPE_RULE_PREFIXES` (`type_transition`, `type_change`, `type_member`, `role_transition`, `range_transition`); a regular expression that matches the `allow source target:tclass { perms };` form. The tier logic is `TIER_RANK = {"low": 0, "medium": 1, "high": 2}` with `TIER_DAYS = {"low": 1, "medium": 3, "high": 7}`. A rule is scored as:
-   - **high** when its target is one of `BASE_TARGET_TYPES`, when its target is `entrypoint`, when it is a type-transition prefix, or when it is unparseable (the parser bails on the whole set as high with `fail_closed: true`).
-   - **low** when every target starts with the application's own module prefix (e.g. `shopapi_var_lib_t`, `shopapi_log_t`) — the delta stays inside the module.
-   - **medium** when it touches a refpolicy interface or a non-module target type.
+   - **high** when the permission set contains `entrypoint`, when the target is one of `BASE_TARGET_TYPES`, when it is a type-transition prefix, or when it is unparseable (the parser bails on the whole set as high with `fail_closed: true`).
+   - **low** when every target starts with `myapp_` — the prefix is a literal in the classifier today, so a `shopapi`-only delta lands in the medium tier and gets three soak days, not one.
+   - **medium** when it touches a refpolicy interface or any other non-module target type.
 3. The classifier's `main()` prints one JSON blob with `tier`, `min_days`, `reason`, a `sediff_excerpt` (first 2000 characters of the diff), and `fail_closed`. That blob is the answer `check_soak_ready.sh --auto-tier` reads.
 
 The fixtures — under `tests/fixtures/blast_radius/` referenced from [`docs/admin/302-PRODUCTION_READINESS.md`](repo:docs/admin/302-PRODUCTION_READINESS.md) — lock the tier logic: every verdict has a golden row, and `make test-fixtures` runs them. Do not change the tier rules without updating fixtures.
@@ -134,7 +134,7 @@ The PR template [`.github/PULL_REQUEST_TEMPLATE/selinux_policy_review.md`](repo:
 | **6. Security and sysadmin checklist** | A table of security checks with status (Pass / Reject) and approver initials — `No over-permissive grants`, `Custom labels enforced`, `Port assignments validated`, `Domain context verified`, `Soak period`, `Systemd-only restart`, `Prod canary host`, `Canary readiness` | Each row corresponds to a post-merge gate in the Ansible playbook pipeline |
 | **7. Admin action** | Post-merge steps: compile, package, release canary, soak monitor, promote to enforce, rollback | All of the playbook orchestration |
 
-The `labels` in the YAML header (`security`, `selinux`, `pending-admin-review`) trigger the CODEOWNERS request. The template does not auto-approve.
+The `labels` in the YAML header (`security`, `selinux`, `pending-admin-review`) are for triage and reporting — GitHub generates the review request from the paths a PR touches, not from labels. The template does not auto-approve.
 
 ::: note The demo-estate workflow and the Fedora container
 

@@ -108,20 +108,20 @@ is re-run for `payments` and `shopapi` as well as `myapp`).
 ## Query the installed policy
 
 These commands each let you ask the loaded policy what it allows. The questions you ask
-each one are different — `sesearch` is a rule lookup, `seinfo` is an attribute lookup,
-`sepolicy generate` is a suggestion, and `sepolgen-ifgen` is a generator for the generator.
+each one are different — `sesearch` is a rule lookup, `seinfo` is an attribute lookup, and
+`sepolgen-ifgen` is a database build for the generator.
 
 | Command | What it tells you or changes | Needs |
 |---|---|---|
 | `sesearch -A -s <src_t> -t <tgt_t> -c <class> -p <perm>` | Searches the running policy for matching `allow` rules; returns each rule verbatim | `rhel host`, `root` |
 | `seinfo -a <attribute> -x` | Lists every type that carries `<attribute>`; requires policy XML (from `policycoreutils-devel`) | `rhel host`, `root` |
-| `sepolicy generate -t <src> -c <class> -p <perm>` | Suggests an `allow` rule from the running policy (approximation: the kernel class/perms are a fixed subset, not the full refpolicy grammar) | `rhel host`, `root` |
-| `sepolgen-ifgen` | Generates `.if` files for each policy XML entry so `sepolicy generate` can match refpolicy interfaces; requires `policycoreutils-devel` | `rhel host`, `root` |
+| `sepolgen-ifgen` | Builds the sepolgen interface database from the policy XML under `/usr/share/selinux/…/modules`, which is what interface matching reads; requires `policycoreutils-devel`. It generates no `.if` files — those are refpolicy source that ships with `selinux-policy-devel` | `rhel host`, `root` |
 
-::: note `sepolicy generate` is a hint, not a command
-`sepolicy generate` reads the running policy and suggests what the tuple would look like —
-but it does not know about refpolicy interfaces, macros, or the custom types this book adds.
-Every suggestion is a candidate for review, never a copy-paste.
+::: note The generator asks the database, not a hint command
+Interface suggestions in this book come from `sepolgen` reading the database that
+`sepolgen-ifgen` builds — the same path `cli/deterministic_gen.py` takes. If the database is
+missing, the generator says so and refuses base-type AVCs unless you pass `--allow-degraded`;
+it never guesses an interface from the running policy.
 :::
 
 ## Audit
@@ -130,9 +130,9 @@ These commands each look at a different slice of `audit.log`:
 
 | Command | What it tells you or changes | Needs |
 |---|---|---|
-| `ausearch -m avc -ts <time>` | Filters `audit.log` for AVC events around `<time>`; supports `recent`, `-i`, or epoch | `rhel host`, `root` |
-| `aureport -au -i` | Produces an audit summary report — summarised access events across all subjects | `rhel host`, `root` |
-| `audit2why` | Converts each AVC into the allow rule that would have made it pass; returns a reviewable sentence for each denial | `rhel host`, `root` |
+| `ausearch -m avc -ts recent` | Filters `audit.log` for AVC events since a time; `-ts` takes the keywords `now`, `recent`, `this-hour`, `boot`, `today`, `yesterday`, `this-week`, `week-ago`, `this-month`, `this-year`, or a date/time pair in your locale's format (`date +%x` prints it). Epoch seconds are not accepted | `rhel host`, `root` |
+| `aureport --avc -i` | The AVC report — one row per denial with its subject and target. (`-au/--auth` is the authentication report, not this one) | `rhel host`, `root` |
+| `audit2why` | Names the cause of each denial — missing type-enforcement allow, wrong label, boolean, port — and tells you to use `audit2allow`. It does not print rules | `rhel host`, `root` |
 | `audit2allow` | Converts each AVC into an allow rule verbatim; output is a suggestion requiring review, never piped directly into `semodule -i` | `rhel host`, `root` |
 
 ::: warn `audit2allow` is the most dangerous command in the book
@@ -154,7 +154,7 @@ no guessed defaults.
 | `make book-check` | Validates the manual (internal links, anchors, `repo:` references) via `python3 tools/book/build.py --check` | `laptop` |
 | `bash scripts/dev_generate_policy.sh` | Developer self-service: export AVCs → run `cli/deterministic_gen.py` → generate policy → diff → promote into `selinux/`; supports `--apply`, `--tune-report`, `--force REASON`, `--allow-needs-review`, `--skip-export`, `--open-pr` | `build host` (for promote) / `laptop` (for explain) |
 | `bash scripts/setup_rhel_hosts.sh doctor` | `getenforce`, `ausearch`, and `sesearch` probes on each RHEL host — configured in `inventory.dev.yml` and `inventory.production.yml` | `rhel host`, `root` |
-| `ansible-playbook` (canary) / `ansible-playbook` (soak) | Deploys the canary module (`part4/19-canary-soak-enforce.md`) or runs the soak gate (`scripts/check_soak_ready.sh`); requires the Ansible controller and `ansible/roles/selinux_pac/` | `controller`, `rhel host` |
+| `ansible-playbook` (canary) / `ansible-playbook` (soak) | Deploys the canary module (`part4/19-canary-soak-enforce.md`) or runs the daily soak monitor — `soak_monitor.yml` calls `monitor_avc.sh --manifest … --max-net-new …`, `soak_status.yml` calls `collect_soak_facts.sh`. (`check_soak_ready.sh` is the host-side CLI for the same gate, and the enforce role's own precondition) | `controller`, `rhel host` |
 
 ::: note `make test-fixtures` is the smoke test for the generator
 Because every classification verdict has at least one golden fixture under

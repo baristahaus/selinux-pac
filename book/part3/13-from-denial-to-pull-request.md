@@ -23,7 +23,7 @@ Numbered:
 
 1. Deploy the application on `rhel-qa` with a types-only seed module — no allow rules yet, just domains and labels.
 2. Switch that domain to permissive (`semanage permissive -a shopapi_t`). The kernel keeps logging every denied tuple, but each one lets the operation proceed.
-3. Exercise the application through the documented test suite — for `shopapi` that is `curl /health /state /log /feature-spool` on :8091.
+3. Exercise the application through the documented test suite — for `shopapi` that is the manifest's integration command: `curl -sf http://127.0.0.1:8091/health && curl -sf http://127.0.0.1:8091/state && curl -sf http://127.0.0.1:8091/log`. **Not** `/feature-spool` — that is the post-enforce outage beat, and harvesting its AVC during first-ship contaminates the PR.
 4. Export AVCs with `scripts/dev_generate_policy.sh` (or the explicit `bash scripts/dev_generate_policy.sh --skip-export` form that operates on a pre-existing `policy_out/avc.log`).
 5. Run `cli/deterministic_gen.py` against the AVC log, the manifest, and the committed `.te` / `.fc`. The script writes `policy_out/{app}.te`, `policy_out/{app}.fc`, `policy_out/pr_summary.md`, and `policy_out/findings.json`.
 6. Inspect the diff against `selinux/`. If every verdict passes and the access delta looks like the AVC lines, open the PR.
@@ -140,34 +140,32 @@ Two gates catch the generator before it ships:
 1. **CI `forbidden-patterns`.** `scripts/validate_forbidden_patterns.sh` runs as a GitHub workflow (`.github/workflows/selinux-policy-ci.yml`). It scans `selinux/*.te` for the same forbidden-target list that the generator carries in `cli/policy_rules.py`: `shadow_t`, `unconfined_t`, `sysadm_t`, and wildcard allows. The generator already ran that check — the same script — so the CI job should be green without surprise failures.
 2. **CODEOWNERS review.** The PR template labels every submission `security`, `selinux`, `pending-admin-review`. The generator classifies denials; the reviewer classifies trust. A rule that names a private type under the application directory is a green signal; a rule that names a system type is a yellow signal regardless of how many AVC lines produced it.
 
-The generator is not a reviewer. `VERDICT_NEEDS_REVIEW` means the tuple is legitimate but the allow would weaken the domain (`execmem`, `dac_override`, or a foreign `process` transition). It is recorded in `findings.json` and listed in `pr_summary.md` as a security decision, not a labeling miss. It is not written to the `.te` unless `--allow-needs-review` is passed with at least one explicit `--allow-needs-review-perm`. That switch is the developer saying: "this AVC proved the rule; I accept the weakening."
+The generator is not a reviewer. `VERDICT_NEEDS_REVIEW` means the tuple is legitimate but the allow would weaken the domain (`execmem`, `dac_override`, or a foreign `process` transition). It is recorded in `findings.json` and listed in `pr_summary.md` as a security decision, not a labeling miss. It is not written to the `.te` unless `--allow-needs-review` is passed; `--allow-needs-review-perm <perm>` is the narrower form, which admits only the named permissions. Either way the switch is the developer saying: "this AVC proved the rule; I accept the weakening."
 
 `VERDICT_TOOLCHAIN_REQUIRED` blocks generation entirely. The generator refuses a silent raw allow on a base type when `sesearch` cannot confirm a boolean, and `sepolgen` cannot confirm a refpolicy interface. The banner printed on stderr reads:
 
-```
+```text
 SEPOLGEN INTERFACE MATCHING IS NOT AVAILABLE
 
 Install setools-console, ensure policy is loaded, run sepolgen-ifgen,
 or pass --allow-degraded (not recommended).
-```text
+```
 
-`--allow-degraded` records each raw allow as `engine=degraded` in `findings.json`; the admin reviewer must treat those rows as `audit2allow` output, not interface-backed policy.
+`--allow-degraded` records each raw allow as `engine=degraded` in `findings.json`, turns the blocked verdict into a `direct` allow, and lets generation finish; the admin reviewer must treat those rows as `audit2allow` output, not interface-backed policy (chapter 14 has the fixture).
 
-## `::: why` why the loop is built this way
-
+::: why Why the loop is built this way
 If the generator compiled directly and loaded the module on `rhel-prod`, the next stage would be a canary with no soak. If the operator skipped the PR body and ran `semodule -i` from `policy_out/`, the next stage would be a denial response — and chapter 20 handles the 02:00 card. The loop is built so the most dangerous decision (loading a new allow on a live host) is never the same decision that generated the rule. The developer generates a reviewed diff; the admin loads it through a canary. That separation is what the loop buys you.
+:::
 
-## `::: try` run the generator locally
+::: try Run the generator locally
 
-This works on a laptop with no SELinux — it only needs Python 3. The inputs are real fixture files from the repository.
+This works on a laptop with no SELinux — it only needs Python 3 and PyYAML (`make deps`). The inputs are real fixture files from the repository, and every command below writes only into `/tmp`.
 
 ```bash
 cd selinux-pac
-
-# (optional) pull the manifest-driven dependencies the CLI uses.
 make deps
 
-# One command: explain mode, against the mislabeled-var-lib fixture.
+# 1. Classify the fixture. --explain prints and writes no files.
 python3 cli/deterministic_gen.py --explain \
   --avc-log docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
   --manifest config/myapp.manifest.yml \
@@ -175,29 +173,44 @@ python3 cli/deterministic_gen.py --explain \
   --existing-fc selinux/myapp.fc
 ```
 
-Expected output (verbatim from the golden fixture `docs/examples/fixtures/deterministic/01-mislabeled-var-lib/expected.json`):
-
 ```text
-[   fc_drift] myapp_t → var_lib_t:file { write }
-               /var/lib/myapp/data.log should already be myapp_var_lib_t per the .fc,
-               but is labeled var_lib_t on disk. No policy change needed — run:
-               restorecon -Rv /var/lib/myapp/data.log
+# stderr first — this laptop has no sepolgen, which fixture 01 does not need:
+================================================================================
+WARNING: SEPOLGEN INTERFACE MATCHING IS NOT AVAILABLE
+================================================================================
+
+[    fc_drift] myapp_t → var_lib_t:file {write}
+               /var/lib/myapp/data.log should already be myapp_var_lib_t per the .fc, but is labeled var_lib_t on disk. No policy change needed — run: restorecon -Rv /var/lib/myapp/data.log
 ```
 
-A green exit with no blockers and the verdict `fc_drift` confirms the fixture passes every check — the generator refused to allow a generic type, asked for a `restorecon`, and wrote the rule as a comment in `findings.json`.
+`expected.json` for that fixture is the machine-readable form of the same answer — `"verdict": "fc_drift"`, `"tgt": "var_lib_t"` — and the sentence above is the `note` field that lands in `findings.json`. The verdict confirms the fixture passes every check: the generator refused to allow a generic type, asked for a `restorecon`, and wrote no allow.
 
-To go further and assemble a PR body against this fixture:
+Drop `--explain` to write the artifacts, and assemble a PR body without a SELinux host:
 
 ```bash
-bash scripts/dev_generate_policy.sh \
-  --skip-export \
+# 2. Write the artifacts into /tmp (no repo state touched).
+python3 cli/deterministic_gen.py \
+  --avc-log docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
+  --manifest config/myapp.manifest.yml \
+  --existing-te selinux/myapp.te \
+  --existing-fc selinux/myapp.fc \
+  --out-dir /tmp/myapp-out
+# → /tmp/myapp-out/{findings.json,myapp.te,myapp.fc,pr_summary.md}, exit 0
+
+# 3. Assemble the PR body the reviewer reads.
+bash scripts/assemble_pr_body.sh \
   --app-name myapp \
-  --out-dir policy_out \
-  --staging-host laptop-local \
+  --pr-summary /tmp/myapp-out/pr_summary.md \
+  --avc-log docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
+  --output /tmp/myapp-out/pr_body.md \
+  --skip-policy-diff \
+  --staging-host "laptop (no SELinux)" \
   --test-suite "deterministic fixture 01"
+# → Wrote /tmp/myapp-out/pr_body.md
 ```
 
-This writes `policy_out/pr_body.md` and leaves `selinux/` untouched — exactly what the chapter promises: nothing touches production.
+`--skip-policy-diff` is what makes step 3 laptop-safe: the real diff needs `sesearch` against a loaded policy. On `rhel-qa` the same body is produced by `dev_generate_policy.sh`, which exports the AVCs, compiles the candidate, and calls this script for you — that is the path that must never leave the host, because it is the only one that ends in a `.pp`.
+:::
 
 ## What you can do now
 

@@ -31,8 +31,9 @@ make check     # fixtures + static validators + linters; no SELinux host require
 ```
 
 ::: good What you should see
-`make check` ends with `make test OK` after running the deterministic fixture suite, the
-payments and blast-radius suites, the manifest validators, and the policy linting. Any missing
+`make check` runs the deterministic fixture suite, the payments and blast-radius suites, the
+manifest validators, the policy linting, and the book link check. You should see `make test OK`
+mid-run, then the lint results, and it ends with `book: OK (31 pages, 0 warnings)`. Any missing
 optional linter prints `SKIP` rather than failing — the offline contract is "no network, no
 root, no kernel".
 :::
@@ -87,7 +88,8 @@ Any RHEL-family host works. Four commands tell you whether the book's tooling wi
 
 | Missing piece | Install |
 |---|---|
-| `ausearch`, `sesearch` | `dnf install setools-console policycoreutils` |
+| `ausearch`, `aureport` (and `auditd` itself) | `dnf install audit` — then make sure `auditd` is running |
+| `sesearch`, `seinfo` | `dnf install setools-console` |
 | `selinux-policy-devel` | `dnf install selinux-policy-devel` (compile only; the generator itself does not need it) |
 | `sepolgen-ifgen` interface matching | `dnf install policycoreutils-devel` then run `sepolgen-ifgen` once |
 
@@ -130,7 +132,7 @@ Six terms carry the whole book. If you memorise nothing else, memorise these.
 Work through this before the first chapter. It takes two minutes and prevents a whole class of
 confusion later.
 
-- [ ] `make check` ends with `make test OK`
+- [ ] `make check` prints `make test OK` and finishes with `book: OK`
 - [ ] The fixture 02 explanation names the verdict `private_port`
 - [ ] On a RHEL host: `getenforce` prints `Enforcing`
 - [ ] On a RHEL host: `ls -Z /usr/bin/passwd` shows a type in the third field of the label

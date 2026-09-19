@@ -4,19 +4,21 @@
 
 ## How the classification works
 
-`cli/deterministic_gen.py` runs one pipeline per AVC line: it parses the audit log, merges the per-permission entries, subtracts anything already covered by the existing `.te`, and then runs `classify()` on each uncovered `AccessNeed`. The `classify` function (lines 335–615) walks the same decision ladder for every denial:
+`cli/deterministic_gen.py` runs one pipeline per AVC line: it parses the audit log, merges the per-permission entries, subtracts anything already covered by the existing `.te`, and then runs `classify()` on each uncovered `AccessNeed`. The `classify` function walks the same decision ladder for every denial, in this order:
 
-1. Does an existing baseline macro already cover it? → `baseline`.
-2. Is the target a forbidden type (shadow, unconfined, sysadm, security, passwd_file)? → `forbidden`.
-3. Is the target a generic file or port type? → `fc_fix`, `fc_drift`, or `private_port`.
-4. Does refpolicy ship an interface for this exact need? → `interface`.
-5. Does the target already exist inside the module (a private type)? → `direct`.
-6. Does `sesearch`/boolean triage surface an applicable `setsebool`? → `boolean`.
-7. Did sepolgen run, but no interface matched? → `direct` with the explicit allow.
-8. Is sepolgen missing? → `toolchain_required`.
-9. Are any of the requested permissions on the `NEEDS_REVIEW_RULES` list? → `needs_review`.
+1. Does an existing baseline macro cover it? → `baseline`.
+2. Is the target a forbidden type (`shadow_t`, `unconfined_t`, `sysadm_t`, `security_t`, `passwd_file_t`)? → `forbidden`.
+3. Is the target a generic file type on a path the module owns? → `fc_drift` when the `.fc` already covers the path, `fc_fix` when it does not.
+4. Is the target a generic port type bound with `name_bind`? → `private_port`.
+5. Is it a `node_bind` on `node_t`? → `interface` (`corenet_*_bind_generic_node`).
+6. Is the need already allowed by the committed `.te`? → `baseline`.
+7. Is the permission on the `NEEDS_REVIEW_RULES` list (`execmem`, `dac_override`, a foreign `process` transition)? → `needs_review`. **This is checked before the module-private type branch**, by design — the security decision outranks the convenient answer.
+8. Does the target exist inside the module (a private type)? → `direct` — a refpolicy macro, or the explicit allow.
+9. Does `sesearch`/boolean triage surface an applicable `setsebool`? → `boolean`.
+10. Does sepolgen match a refpolicy interface? → `interface` with the macro. No match at all → `direct` with a raw allow and `engine=house_rules`.
+11. Is sepolgen missing? → `toolchain_required` — unless `--allow-degraded` was passed, which turns the row into `direct` with `engine=degraded`.
 
-The output is one `Finding` dataclass with fields `verdict`, `rendered`, `note`, `engine`, `paths`, and `next_action`. The `NEXT_ACTION` map (in `policy_rules.py`) is the only place each verdict's operator action comes from — each verdict has exactly one prescribed response, and each response is distinct from the others.
+The output is one `Finding` dataclass with fields `verdict`, `rendered`, `note`, `engine`, `paths`, and `next_action`. The `NEXT_ACTION` map (in `policy_rules.py`) is the only place each verdict's operator action comes from — every verdict has a prescribed response, and several verdicts deliberately share one: `fc_fix` and `fc_drift` both map to `update_fc_and_restorecon`, `direct` and `interface` both map to `update_te_allow`, and `baseline` maps to the empty string (nothing to do — the need is already covered). The **verdict name**, not the action, is what distinguishes those pairs.
 
 ## The baseline verdict
 
@@ -73,7 +75,7 @@ tclass=file permissive=1
 ]
 ```
 
-`suggest_fc_type` walks the manifest's `install_root`/`extra_fc_roots` hints, picks `myapp_var_lib_t`, and the generator writes `re.escape("/opt/myapp/cache/data")    gen_context(system_u:object_r:myapp_var_lib_t,s0)` into the `.fc`. The operator then runs `restorecon -Rv /opt/myapp/cache/data` on the host.
+`suggest_fc_type` walks the manifest's `paths` hints in order — `log_dir` → `{app}_log_t`, `var_dir` → `{app}_var_lib_t`, `runtime_dir` → `{app}_var_run_t`, `install_root` → `{app}_exec_t` — then falls back to `extra_fc_roots` for `{app}_var_lib_t`. `/opt/myapp/cache/data` sits under `install_root`, so the generator writes `gen_context(system_u:object_r:myapp_exec_t,s0)` into the `.fc` for that path. The operator then runs `restorecon -Rv /opt/myapp/cache/data` on the host. (The artifact is in `docs/examples/fixtures/deterministic/06-fc-missing-line/_out/` — `findings.json` and the generated `myapp.fc`.)
 
 **`fc_drift`:** from `docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log`:
 
@@ -99,7 +101,7 @@ The `.fc` already has a `gen_context` line covering `/var/lib/myapp(/.*)?`. The 
 
 ## private_port
 
-A generic port (`unreserved_port_t`, `reserved_port_t`, `ephemeral_port_t`, `port_t`) used for `name_bind` or `node_bind`.
+A generic port (`unreserved_port_t`, `reserved_port_t`, `ephemeral_port_t`, `port_t`) bound with `name_bind`. A `node_bind` denial is a different verdict: it matches on `node_t` and comes back as `interface` (`corenet_tcp_bind_generic_node` / `corenet_udp_bind_generic_node`), because the fix is a refpolicy interface rather than a private port.
 
 **From `docs/examples/fixtures/deterministic/02-port-bind/avc.log`:**
 
@@ -265,7 +267,7 @@ tclass=dir permissive=1
 }
 ```
 
-The generator prints the banner from `emit_sepolgen_warning()` in `cli/deterministic_gen.py` and returns `1`. The operator installs `policycoreutils-devel`, runs `sepolgen-ifgen`, and reruns. Alternatively, `--allow-degraded` records a degraded allow in `findings.json` with `engine=degraded` and still returns `1` (the banner and `findings.json` survive; generation stays blocked).
+The generator prints the banner from `emit_sepolgen_warning()` in `cli/deterministic_gen.py` and returns `1`. The operator installs `policycoreutils-devel`, runs `sepolgen-ifgen`, and reruns. Alternatively, `--allow-degraded` turns the blocked row into a `direct` allow with `engine=degraded`, generation completes, and the run exits `0` — the files are written and the reviewer is expected to treat those rows as `audit2allow` output. The flag is the escape hatch for a host that has a loaded policy but no sepolgen; it is not a way to skip the interface question silently.
 
 ## forbidden
 
@@ -339,7 +341,7 @@ tclass=process permissive=1
 }
 ```
 
-The generator emits `allow myapp_t myapp_t:process execmem;` into `findings.json` and the pr_summary, and the reviewer text: *"Security decision (needs review): the AVC log showed this permission was denied. It is not a labeling miss. The proposed allow is recorded in findings.json / pr_summary.md but is not written to the .te unless you pass --allow-needs-review (or --allow-needs-review-perm)."* Then: `process:execmem allows map memory as both writable and executable. It weakens the domain because it breaks W^X: memory the process can write, it can also execute. Alternatives: this AVC showed process execmem was denied. Some JVM/runtime configurations avoid writable+executable mappings; do not assume a JVM needs execmem. Confirm empirically for this workload and its options before --allow-needs-review.`
+The generator emits `allow myapp_t self:process execmem;` into `findings.json` and the pr_summary — `self` is how the renderer writes a target that is the domain itself (chapter 12 quotes the same line) — and the reviewer text: *"Security decision (needs review): the AVC log showed this permission was denied. It is not a labeling miss. The proposed allow is recorded in findings.json / pr_summary.md but is not written to the .te unless you pass --allow-needs-review (or --allow-needs-review-perm)."* Then: `process:execmem allows map memory as both writable and executable. It weakens the domain because it breaks W^X: memory the process can write, it can also execute. Alternatives: this AVC showed process execmem was denied. Some JVM/runtime configurations avoid writable+executable mappings; do not assume a JVM needs execmem. Confirm empirically for this workload and its options before --allow-needs-review.`
 
 `exit_code: 1` — this finding is a generation blocker.
 
@@ -408,14 +410,13 @@ python3 cli/deterministic_gen.py --explain \
   --allow-needs-review
 ```
 
-Each invocation runs in `repo root` (no SELinux required). The first prints `[fc_drift] myapp_t → var_lib_t:file { write }` with a restorecon note — compare to `01-mislabeled-var-lib/expected.json`. The second prints `[forbidden] myapp_t → shadow_t:file { read open }` and exits 1 — compare to `03-shadow-read/case.meta.json`. The third prints `[needs_review]` with the full reviewer note and exits 1; with `--allow-needs-review` the explicit allow is still withheld from the `.te` but `findings.json` records it — compare to `12-execmem-review/expected.json` and the note about `execmem`.
+Each invocation runs in `repo root` (no SELinux required). The first prints `[    fc_drift] myapp_t → var_lib_t:file {write}` with a restorecon note and exits 0 — compare to `01-mislabeled-var-lib/expected.json`. The second prints `[   forbidden] myapp_t → shadow_t:file {open read}` and exits 1 — compare to `03-shadow-read/case.meta.json`. The third prints `[needs_review] myapp_t → myapp_t:process {execmem}` with the full reviewer note and the proposed rule `→ allow myapp_t self:process execmem;`, then exits 1 — because the note is only a note. Drop `--explain` and pass `--allow-needs-review` and that same line lands in the generated `.te` under a `# Needs review` heading, the run exits 0, and the reviewer is on the hook for the decision the flag recorded.
 
 
 :::
 
-::: why Each verdict is the operator's only response
-Each verdict has exactly one prescribed action — `baseline` means nothing, `fc_drift` means restorecon, `boolean` means setsebool, `private_port` means manifest-edit, `direct` means manual-review, `forbidden` means refuse-the-allow, `toolchain_required` means install-the-toolchain, and `needs_review` means opt-in. Each action lives in the `NEXT_ACTION` map in `cli/policy_rules.py`; each verdict's `next_action` field is the operator's only source of that answer. Without reading that map, every finding you pull out of `findings.json` is a verdict name and a note — without knowing what to do next. That is why each verdict must carry its action and each action must be distinct.
-
+::: why Next action is the field the operator acts on
+Every verdict maps to one prescribed action — `baseline` means nothing, `fc_drift` and `fc_fix` mean restorecon, `boolean` means setsebool, `private_port` means manifest-edit, `direct` and `interface` mean write-the-allow, `forbidden` means refuse, `toolchain_required` means install-the-toolchain, and `needs_review` means opt-in. The map lives in `cli/policy_rules.py`, and each finding carries the resolved value in its `next_action` field. Two verdicts may share an action — `fc_fix` and `fc_drift` differ in *whether a `.fc` line is written*, not in what the operator then runs — but no verdict is ever missing one, and `baseline`'s deliberate empty string is the one case where the field says "nothing to do".
 :::
 ## What you can do now
 

@@ -44,8 +44,10 @@ The role's `canary.yml` does six things in order, and every one of them is a tas
 4. **Label and verify paths** — ensure the application directories exist, `restorecon` them, and
    then *verify* the contexts before any service restarts.
 5. **Restart and probe** — reset systemd failure counters, restart the application services, and
-   run the unified endpoint smoke (`wait_for_endpoints.sh` with the manifest's endpoints, retries
-   and delay from the role).
+   run the unified endpoint smoke: `wait_for_endpoints.sh` against the manifest's endpoints,
+   with the probe host from the inventory (`http_probe_host`) and the retry window baked into
+   the task (`--retries 15 --delay 2`). Lengthening that window today means editing
+   `ansible/roles/selinux_pac/tasks/canary.yml`, not the inventory.
 6. **Record the clock and the report** — write the canary timestamp to the soak marker
    (`soak_marker_file`, by default `<var_dir>/selinux_canary_deployed_at`) and produce a deploy
    report at `<var_dir>/selinux_deploy_report.json`.

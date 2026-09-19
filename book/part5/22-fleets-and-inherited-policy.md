@@ -119,7 +119,7 @@ Adding a new app to the pipeline touches five things. Four of them are configura
 |--------|--------------|----------------------|
 | Manifest (`config/<app>.manifest.yml`) | new entry; bind ports, units, probes, domains | the format — every manifest consumes the same keys |
 | Generator pre-flight | runs again for the new service; vendor/base classification | the six-situation table — the same situations apply |
-| Policy CI | `forbidden-patterns`, `version-consistency` run on the new `selinux/<app>/` | the CI shape — each app gets the same gates |
+| Policy CI | one added line per app in `.github/workflows/selinux-policy-ci.yml` — `POLICY_MODULE=<app> SELINUX_DOMAIN=<app>_t bash scripts/validate_forbidden_patterns.sh selinux/<app>` | the gate script and its twelve refusals — the workflow does not discover module directories by itself |
 | RPM set | one new `<app>-selinux` RPM per service | the packaging pipeline — `packaging/build_rpms.sh` and AAP |
 | Inventory | `ansible/inventory.dev.yml` / `inventory.production.yml` grow a host entry | the Ansible role schema — `selinux_pac` loads the same manifest keys |
 

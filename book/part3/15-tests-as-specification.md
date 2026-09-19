@@ -38,13 +38,10 @@ docs/examples/fixtures/deterministic/01-mislabeled-var-lib/
 ├── expected.json
 ```
 
-`avc.log` is a single line, real audit output:
+`avc.log` holds the raw audit lines — one record per line, exactly the shape `ausearch --format raw` prints:
 
 ```text
-avc: denied { write } for pid=1234 comm="python3" name="data.log"
-  path="/var/lib/myapp/data.log" dev="vda4" ino=12345
-  scontext=system_u:system_r:myapp_t:s0 tcontext=system_u:object_r:var_lib_t:s0
-  tclass=file permissive=1
+type=AVC msg=audit(1710000100.000:200): avc:  denied  { write } for  pid=1234 comm="python3" name="data.log" path="/var/lib/myapp/data.log" dev="vda4" ino=12345 scontext=system_u:system_r:myapp_t:s0 tcontext=system_u:object_r:var_lib_t:s0 tclass=file permissive=1
 ```
 
 `expected.json` is an array of verdict rows — each row names the verdict and the target type:
@@ -104,7 +101,7 @@ The top-level `Makefile` is the single entry point for all verification. The tar
 |--------|--------------|
 | `make test-fixtures` | `scripts/run_deterministic_fixtures.sh` + `run_deterministic_payments_check.sh` + `run_blast_radius_fixtures.sh` + `run_tune_report_fixtures.sh` |
 | `make test-static` | `make test-forbidden` + `test-version` + `test-rpm` + `test-manifest` — shell validators that grep `selinux/` |
-| `make test-smoke` | `scripts/smoke_test.py` — every Python test named §9 of the testing doc |
+| `make test-smoke` | `scripts/smoke_test.py` — the Python test suite; §2 of the testing doc describes its place in the pipeline, and the file itself is the full list |
 | `make test` | `deps test-fixtures test-static test-smoke` — offline health check, no SELinux host required |
 | `make check` | `test lint book-check` — full repo health: offline tests, linters, book links |
 | `make lint` | `lint-shell` (shellcheck) + `lint-yaml` (yamllint) + `lint-ansible` (ansible-lint) |
@@ -161,9 +158,9 @@ This is the honest section. Every automated test asserts a decision the machine 
 | Compiled policy on the host | `bash scripts/compile_and_validate.sh selinux` on **rhel-qa**; not automated in CI |
 | Real denials under `audit.log` | staging `monitor_avc.sh` runs permissive, exports AVCs, talks |
 | Ansible behaviour against a live host | `ansible/` playbooks; `enforce_production.yml`, `emergency_rollback.yml` |
-| The book's prose | generator checks links, anchors, repo: references (`book-check`) |
+| The book's prose | generator checks links, anchors, `repo:` references (`book-check`) |
 
-The full list is in the testing doc — §8 — every row is reproduced here. This chapter will not claim a test it does not have.
+The testing doc keeps its own list in §8 — the gaps the *pipeline* cannot close on its own, each with the manual run that covers it: real `logrotate` cron as `logrotate_t` during a staging soak, the RPM upgrade relabel path on a throwaway VM, fleet-wide `serial: 1` enforce against a canary host first, and AVC classification under `semodule -DB` by hand. Read both tables before you claim a change is covered.
 
 ::: why Each row is the reviewable decision
 Each `expected.json` row is a row in a file that says *this log, this verdict* — and that row is what the review reads. The test does not care about whether you refactored the parser, whether the net-new filter got faster, whether the boolean branch reached `sesearch` or `boolean_hints.yml`. It cares about the decision. If the decision changes when nothing about the log changes, you have a regression, not a feature. Each fixture row holds the reviewable data — that is why each row must carry its two fields exactly, and why each row must be preserved when the rule moves.
@@ -179,7 +176,7 @@ $ cd selinux-pac
 $ make test-fixtures
 ```
 
-The fixture suite needs nothing but `python3` — no SELinux, no root, no pip. (`make deps` installs `cli/requirements.txt`, which the paths that talk to a model need; the fixtures do not.)
+The fixture suite needs `python3` and PyYAML (`pip3 install -r cli/requirements.txt`, or `make deps`) — no SELinux, no root, no network once installed. `make test-fixtures` itself does not depend on `deps`, so on a bare interpreter it fails at `import yaml` before the first fixture runs; `make test` and `make check` do run `deps` first.
 
 Every test should pass. Now add a fixture. The log must be one record per line, in the shape `ausearch` writes — the runner reads for `type=AVC` lines and ignores a wrapped record:
 

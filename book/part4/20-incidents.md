@@ -96,7 +96,7 @@ The guard rails in [`repo:ansible/roles/selinux_pac/tasks/enforce.yml`](ansible/
 
 | Guard rail | What it enforces |
 |---|---|
-| **Change ticket required** (line 3–6) | Even `force_enforce=true` needs a `change_ticket`. The role refuses without one. |
+| **Change ticket required** (line 2) | Even `force_enforce=true` needs a `change_ticket`. The role refuses without one. |
 | **Lab soak window refused on production** (line 9–16) | `soak_min_days` below 7 on a host in `group: production` is rejected — lab-only value. |
 | **Soak gate skipped when `force_enforce=true`** (lines 19–34) | `collect_soak_facts.sh` is not run; `soak_facts` is not collected; the gate is not passed. |
 | **Canary marker missing** (lines 36–41) | Still blocked without the marker — `deploy_canary` must run before `force_enforce`. |
@@ -106,7 +106,7 @@ The guard rails in [`repo:ansible/roles/selinux_pac/tasks/enforce.yml`](ansible/
 | **Deploy report gate** (lines 73–79) | Skipped when `force_enforce=true`. |
 | **Break-glass message** (lines 80–83) | `force_enforce=true` — skipping soak gate (document approval in change ticket). |
 
-The role does three things after the gate is skipped: re-enable `semodule -B` to restore the dontaudit baseline, remove the permissive flag (`semanage permissive -d` or `semodule -r {{ stub_module_name }}`), verify and restart, and write the enforce deploy report. The `rescue:` block auto-restores the domain to permissive if any of those steps fail, so the operator has a safety net even when the gate is gone.
+The role does four things after the gate is skipped: re-enable the dontaudit baseline with `semodule -B`, remove the permissive flag (`semanage permissive -d`, or `semodule -r {{ stub_module_name }}` on the FCOS overlay), verify and restart the services, and write the enforce deploy report. The `rescue:` block auto-restores the domain to permissive if any of those steps fail, so the operator has a safety net even when the gate is gone.
 
 The guard rails do not prevent an outage. They record that the operator accepted the risk. That is why the change ticket is the only thing on this line: it is the audit trail, not a safety net.
 

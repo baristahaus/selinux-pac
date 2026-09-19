@@ -48,7 +48,15 @@ Domain myapp_t not referenced in selinux/myapp.te
 
 The same verdicts also live in `cli/policy_rules.py`. The generator carries `FORBIDDEN_TARGET_TYPES` — `shadow_t`, `unconfined_t`, `sysadm_t`, `security_t`, `selinux_config_t`, `passwd_file_t` — and `GENERIC_FILE_TYPES` — `var_t`, `var_lib_t`, `var_log_t`, `var_run_t`, `usr_t`, `etc_t`, `tmp_t`, `default_t`, `unlabeled_t`, `home_root_t`, `user_home_t`, `user_home_dir_t` — and `GENERIC_PORT_TYPES` — `unreserved_port_t`, `port_t`, `reserved_port_t`, `ephemeral_port_t`. Each list is a refusal: a tuple targeting any of these names is the default *forbidden*.
 
-The generator records a `forbidden` verdict in `findings.json`, writes `generation_blocked: true` to `pr_summary.md`, and exits with code 1. The fixture for `shadow_t` proves this exactly.
+The generator records a `forbidden` verdict in `findings.json`, sets `generation_blocked: true` in that same file, and exits with code 1, printing the refusal:
+
+```text
+REFUSED: Refusing to grant myapp_t access to shadow_t. Denied paths: n/a
+
+Wrote policy_out/findings.json (generation_blocked=true)
+```
+
+The fixture for `shadow_t` proves this exactly.
 
 ```text
 [
@@ -79,29 +87,45 @@ A rule targeting `var_t:file write` is refused on the same principle. `var_t` co
 
 ## `dontaudit` and `auditallow`
 
-A denial from `dontaudit` looks identical to a denial from a missing rule — the AVC is silent, the process fails with `EPERM`, the log is blank. `dontaudit` is a promise the policy makes: a tuple is allowed but not recorded. When the domain executes the tuple, the policy lets it pass, and the kernel writes nothing about it.
+A denial covered by `dontaudit` looks identical to a denial from a missing rule — the process fails with `EPERM` and the log is blank. `dontaudit` does not allow anything: it suppresses the AVC record for that tuple, and nothing else. The kernel's decision is still *denied*; what disappears is the evidence. The base policy is full of them for exactly that reason — a browser probing for `~/.config`, a service checking a file it will never find — so that normal operation does not fill `audit.log` with failures nobody will act on.
 
-Two commands manage the promise. `semodule -DB` disables the entire `dontaudit` block on the host; `semodule -B` restores it. The canary role runs `-DB` at canary start so soak does not miss denials hidden by `dontaudit`; a failed canary and the rollback path both run `-B`. The host-wide change is documented in [302-PRODUCTION_READINESS.md](docs/admin/302-PRODUCTION_READINESS.md) §206 and [207-SELINUX_BEST_PRACTICES.md](docs/policy/207-SELINUX_BEST_PRACTICES.md) §134.
+Two commands manage the suppression. `semodule -DB` disables the entire `dontaudit` block on the host; `semodule -B` restores it. The canary role runs `-DB` at canary start so soak does not miss denials hidden by `dontaudit`; a failed canary and the rollback path both run `-B`. The host-wide change is documented in [302-PRODUCTION_READINESS.md](docs/admin/302-PRODUCTION_READINESS.md) §206 and [207-SELINUX_BEST_PRACTICES.md](docs/policy/207-SELINUX_BEST_PRACTICES.md) §134. Running `-DB` sends you after the same application bug you would have chased anyway, but shows the denials, and it is required before you conclude that a soak found zero denial.
 
-`auditallow` is the sibling of `dontaudit`: it is a rule that permits a tuple and **always** emits an AVC. A `dontaudit` rule lets the tuple pass silently; an `auditallow` rule lets it pass with a log line. Neither changes the permission — each changes the *visibility* of the decision.
+`auditallow` is the mirror image, and it does not grant a tuple either: it makes an access that an `allow` rule already permits emit an AVC record. `dontaudit` hides a denial; `auditallow` exposes an allow. Neither changes the permission — each changes the *visibility* of the decision.
 
-The common mistake is treating a `dontaudit` silence as a fix: the tuple still executed, the service still survived, and the log was empty. `auditallow` is the replacement — it makes the tuple visible again.
+The common mistake is treating a `dontaudit` silence as a fix. The access was still refused, the service still failed (or swallowed the failure and retried), and the log said nothing. The silence is not a verdict — `semodule -DB` turns it back into evidence, and `auditallow` does the same for one tuple without touching the rest of the host.
 
-`dontaudit` is not a fix for a denial; it is a suppression of the log. A denial still fires in enforcing mode when the tuple is outside both `allow` and `dontaudit`. A `dontaudit`-covered tuple lets the domain pass silently; you cannot tell whether the silence is a fix or a hiding.
+`dontaudit` is not a fix for a denial; it is a suppression of the log. A tuple outside both `allow` and `dontaudit` fails and is recorded. A `dontaudit`-covered tuple fails silently, and from the log alone you cannot tell a service that works from a failure that is being hidden.
 
 ## Policy-level `permissive` versus host-level permissive
 
-This chapter covers a single kind of *permissive* — a policy-level one. The `permissive` keyword on a rule is an allow statement that the kernel records but does not enforce. A module can declare `permissive myapp_t;` and the policy will grant the named tuples even in enforcing mode.
+`permissive myapp_t;` is a declaration, not a rule with a scope of its own: it puts the whole **domain** on the permissive list, so every denial for `myapp_t` is recorded as `permissive=1` instead of being blocked. The kernel still evaluates the policy and still writes the AVC — what changes is the answer, not the visibility.
 
-This is distinct from the per-domain permissive covered in [book/part1/02-what-selinux-actually-checks.md](book/part1/02-what-selinux-actually-checks.md§Default deny, and what permissive changes), where `semanage permissive -a myapp_t` lets the running domain execute every denied tuple with `permissive=1`. Policy-level `permissive` is a module-level permit; host-level `permissive` is a running-domain permit. Each covers a different scope.
+This repository carries that declaration as [`selinux/myapp_canary.te`](selinux/myapp_canary.te), a two-line overlay module whose only job is `permissive myapp_t;` (plus `myapp_backend_t` and `init_t`, for the systemd edge cases). The canary role installs it only when `semanage` is missing on the host; when `semanage` exists it uses `community.general.selinux_permissive` instead, which is the same declaration loaded by `semanage permissive -a myapp_t`. Enforce removes the flag either way — `semanage permissive -d {{ domain }}`, or `semodule -r` of the overlay.
+
+The scope is identical in both forms — one domain, permissive — and that is the point: only the *delivery* differs. The overlay is a versioned artifact: it is reviewed in a PR, shipped in the RPM, and removed by the enforce role. `semanage permissive -a` is host-local state: it survives RPM changes, appears nowhere in the git history, and stays until somebody removes it. Chapter 2 covers the running-domain view; this chapter's only concern is that no permissive declaration — compiled or runtime — is a fix for a denial.
 
 ## Boolean-guarded rules and conditional policy
 
-A boolean is a runtime decision. `allow myapp_t myapp_backend_port_t:tcp_socket name_connect if (myapp_allow_backend_connect);` puts a boolean in front of a rule. The boolean flips on with `setsebool -P myapp_allow_backend_connect on`; the rule only enforces the tuple when the boolean is true.
+A boolean is a runtime decision: `setsebool -P myapp_allow_backend_connect on` flips a value that the policy already knows about, and the rule only enforces the tuple when the boolean is true. The syntax is a block, not a suffix on the rule:
 
-A boolean belongs inside an `if` block when the tuple is a behaviour the administrator wants to control at runtime — a flag that can flip, without recompiling the module. The administrator owns the decision. A rule that is conditional is a rule that is deferential; the admin can say yes or no without changing the binary.
+```text
+tunable_policy(`myapp_allow_backend_connect',`
+    allow myapp_t myapp_backend_port_t:tcp_socket name_connect;
+')
+```
 
-[book/part2/10-ports-booleans-and-transitions.md](book/part2/10-ports-booleans-and-transitions.md) covers the full decision surface for booleans and transitions.
+or, in the upstream `if` form that `tunable_policy` expands to:
+
+```text
+if (myapp_allow_backend_connect) {
+    allow myapp_t myapp_backend_port_t:tcp_socket name_connect;
+}
+```
+
+A boolean belongs inside one of those blocks when the tuple is a behaviour the administrator wants to control at runtime — a flag that can flip, without recompiling the module. The administrator owns the decision. A rule that is conditional is a rule that is deferential; the admin can say yes or no without changing the binary.
+
+[§10 Ports, Booleans and Transitions](../part2/10-ports-booleans-and-transitions.md) covers the full decision surface for booleans and transitions.
 
 ## `needs_review`: execmem
 
@@ -148,9 +172,9 @@ Three alternatives when the tuple refuses. Each one points to a different chapte
 
 | Alternative | Change | Chapter |
 |---|---|---|
-| **Rename the path** | write state to `/run` or `/var/lib/myapp` with a dedicated type | [book/part2/09-file-contexts-and-the-label-lifecycle.md](book/part2/09-file-contexts-and-the-label-lifecycle.md) |
-| **Drop the port** | bind to an unreserved port, run as an unprivileged user, accept the risk | [book/part2/10-ports-booleans-and-transitions.md](book/part2/10-ports-booleans-and-transitions.md) |
-| **Accept the denial** | design around the tuple; the app runs in permissive during soak | [book/part1/05-modes-and-the-cost-of-off.md](book/part1/05-modes-and-the-cost-of-off.md) |
+| **Rename the path** | write state to `/run` or `/var/lib/myapp` with a dedicated type | [§9 File Contexts and the Label Lifecycle](../part2/09-file-contexts-and-the-label-lifecycle.md) |
+| **Drop the port** | bind to an unreserved port, run as an unprivileged user, accept the risk | [§10 Ports, Booleans and Transitions](../part2/10-ports-booleans-and-transitions.md) |
+| **Accept the denial** | design around the tuple; the app runs in permissive during soak | [§5 Modes and the Cost of Off](../part1/05-modes-and-the-cost-of-off.md) |
 
 Rename the path. If the tuple is `allow myapp_t var_t:file write;` and the gate says *forbidden*, label `/var/lib/myapp` with `myapp_var_lib_t`. The rule becomes `allow myapp_t myapp_var_lib_t:file write;` — the gate is satisfied, the domain is narrowed, the baseline is preserved.
 
@@ -169,20 +193,31 @@ A denial you cannot explain is a finding, not an obstacle. If the log is blank a
 
 ::: try Run the forbidden-patterns script against a scratch copy
 
-`scripts/validate_forbidden_patterns.sh` fires on each line in the table above. Run it against a scratch copy of `selinux/myapp.te` on your laptop — copy it to `/tmp` first, never overwrite the tracked file. Read each exact error message the script prints. Each one matches a line in the four conditions table above, and each one is the only thing stopping the bad rule from shipping.
+`scripts/validate_forbidden_patterns.sh` fires on each line in the table above. It needs the module's `.te` *and* `.fc` in the directory it is pointed at (`POLICY_MODULE` picks the name), and the tracked `selinux/myapp.te` passes it — the clean module is the control case. So copy both files, write the bad rules in by hand, and watch the gate refuse them:
 
 ```bash
-# copy first — never overwrite the tracked file:
-$ cp selinux/myapp.te /tmp/myapp.te
+# copy first — never edit the tracked files:
+$ cp selinux/myapp.te selinux/myapp.fc /tmp/myapp-check/
+$ cd /tmp/myapp-check
 
-# run against the scratch copy:
-$ bash scripts/validate_forbidden_patterns.sh /tmp
+# the clean copy passes:
+$ bash /path/to/repo/scripts/validate_forbidden_patterns.sh /tmp/myapp-check
+[INFO] Forbidden-pattern checks passed for myapp
 
-# read each exact error message:
-$ bash scripts/validate_forbidden_patterns.sh /tmp 2>&1
+# now write the rules from the table above and run it again:
+$ cat >> myapp.te <<'EOF'
+allow myapp_t var_t:file { write };
+allow myapp_t self:* { transition };
+allow myapp_t shadow_t:file read;
+EOF
+$ bash /path/to/repo/scripts/validate_forbidden_patterns.sh /tmp/myapp-check
+[ERROR] Wildcard object class in allow rule
+[ERROR] Forbidden allow rule targeting self:* (over-broad)
+[ERROR] Forbidden allow rule targeting high-privilege type: shadow_t
+[ERROR] Forbidden broad var_t:file write — use dedicated application types
 ```
 
-Each error the script prints names a house rule. Each house rule names the only thing stopping the bad rule from shipping.
+Each error the script prints names a house rule. Each house rule is the only thing stopping the bad rule from shipping.
 
 :::
 ## What you can do now

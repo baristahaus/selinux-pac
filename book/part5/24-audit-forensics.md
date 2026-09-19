@@ -34,21 +34,33 @@ hides denials from you.
 
 | Parameter | What it governs | Hidden-denial mode |
 |-----------|-----------------|---------------------|
-| **`max_log_file`** | Maximum size of each log file (MB). | Set too low — the log wraps and overwrites old denials before you read them. |
-| **`num_logs`** | Number of historical copies to keep before oldest is dropped. | Set to zero or one — the oldest file, where an early denial lived, is gone by the time you reach it. |
-| **`space_left`** | Bytes of free disk before `auditd` escalates. | Default is conservative. When the disk fills below this threshold, `space_left_action` runs. |
-| **`admin_space_left`** | Bytes of free disk before a "critical" alert fires. | Set too low — no operator wakes for the wrapping. |
-| **`space_left_action`** | Action on reaching `space_left`. | **Default: `SYSLOG`.** On a log-full host, the old records keep arriving while `auditd` writes the new ones, and the operator thinks "everything is fine" because nothing is stopping. |
-| **`admin_space_left_action`** | Action on critical shortage. | **Default: `SINGLE`.** Locks the admin out until a page arrives. |
-| **`max_log_file_action`** | Action when a file exceeds `max_log_file`. | **Default: `ROTATE`.** Each wrap creates a new file; the oldest is dropped. |
-| **`disk_full_action`** | Action when no space left. | **Default: `SINGLE`.** Locks the host until someone `rm` clears space. |
-| **`disk_error_action`** | Action when a disk error. | **Default: `SINGLE`.** Same: lock out until someone responds. |
-| **`kern_log_rate_limit`** | Per-event kernel message limit (msgs/s). | **Default: 0 = unlimited.** Setting a limit drops rate-limited messages silently; an attacker who generates denial storms can push the host into `SINGLE` or just silence the audit. |
+| **`max_log_file`** | Maximum size of each log file (MiB). | Set too low — the log wraps and overwrites old denials before you read them. |
+| **`num_logs`** | Number of historical copies to keep before the oldest is dropped. | Set to zero or one — the oldest file, where an early denial lived, is gone by the time you reach it. |
+| **`space_left`** | Free space (MiB, or a percentage such as `5%`) before `auditd` escalates. | Set too low — the first warning arrives after the wrap has already begun. |
+| **`admin_space_left`** | Free space (MiB or `%`) at which the emergency action fires. | Set too low — no operator wakes before logging stops. |
+| **`space_left_action`** | Action on reaching `space_left`. | **Default: `SYSLOG`.** A warning line in the system log and nothing else: the host keeps writing audit records until the next threshold. |
+| **`admin_space_left_action`** | Action at the emergency threshold. | **Default: `SUSPEND`.** `auditd` stops writing records to disk; the host keeps running and the trail goes quiet. |
+| **`max_log_file_action`** | Action when a file exceeds `max_log_file`. | **Default: `ROTATE`.** Each wrap starts a new file; the oldest is dropped. |
+| **`disk_full_action`** | Action when no space is left. | **Default: `SUSPEND`.** Same silence: no space, no new records, no outage to alert anyone. |
+| **`disk_error_action`** | Action on a disk error while writing. | **Default: `SUSPEND`.** A failing disk stops the audit trail without stopping the workload. |
+| **`q_depth`** | Depth of the internal queue between the kernel and `auditd`'s child processes. | **Default: 2000.** A denial storm fills the queue faster than it drains, and the events that no longer fit are lost — see `overflow_action`. |
+| **`overflow_action`** | Action when that queue overflows. | **Default: `SYSLOG`.** The overflowing events are dropped; the log keeps its warning line, not the denials. |
 
-The two most commonly forgotten values are **`space_left_action`** and
-**`disk_full_action`**. Both default to locking the admin out on a full disk.
-A log that wraps and never grows past `max_log_file` keeps the same story
-quiet — that is the silent one.
+The values above are the defaults shipped in the sample `auditd.conf`; the three stages are `space_left` (first warning, `SYSLOG`), `admin_space_left` (emergency, `SUSPEND`), and a completely full partition (`disk_full_action`, `SUSPEND`). **`SUSPEND` stops the write while the host keeps serving** — the app is still being denied, and the audit trail simply stops saying so. Only `single` puts the machine into single-user mode and locks the admin out; `halt` is deprecated as an action. Read what your host actually runs before trusting any of it:
+
+```bash
+$ grep -E '^(max_log_file|num_logs|space_left|admin_space_left|space_left_action|admin_space_left_action|disk_full_action|disk_error_action|q_depth|overflow_action) =' /etc/audit/auditd.conf
+max_log_file = 8
+num_logs = 5
+space_left = 75
+space_left_action = SYSLOG
+admin_space_left = 50
+admin_space_left_action = SUSPEND
+disk_full_action = SUSPEND
+disk_error_action = SUSPEND
+q_depth = 2000
+overflow_action = SYSLOG
+```
 
 ## `ausearch` in practice
 
@@ -57,11 +69,11 @@ Every question asks about the same log. Each query selects a different lens.
 | Query | What it answers |
 |-------|-----------------|
 | **`ausearch -m avc`** | *What did the policy block today?* |
-| **`ausearch -ts recent`** | *What happened in the last hour?* |
-| **`ausearch --start 2026/09/17 14:00:00`** | *What happened during this window?* |
+| **`ausearch -ts recent`** | *What happened in the last ten minutes?* (`recent` is ten minutes; the other keywords are `today`, `this-hour`, `boot`, `this-week`, `week-ago`, `this-month`, `this-year`.) |
+| **`ausearch -ts 09/17/2026 14:00:00`** | *What happened during this window?* The date must match your locale — `date +%x` prints the format `ausearch` will accept. |
 | **`ausearch -p 1234`** | *What did this process do?* |
-| **`ausearch -i`** | *What does this log look like to a human?* (enables the human-readable `-i` format.) |
-| **`ausearch --format text`** | *What do I get back for downstream tooling?* (machine-friendly plain output, no enrichment.) |
+| **`ausearch -i`** | *What does this log look like to a human?* (interprets uids and contexts into names.) |
+| **`ausearch --format csv`** | *What do I get back for downstream tooling?* (one normalized CSV row per event; `--format text` is the opposite — an English sentence with the detail dropped.) |
 
 Combine them when you need all three. The order of selection is
 independent — each filter applies to every record before the tool prints.
@@ -76,13 +88,11 @@ Each report type answers a different question about the same log.
 
 | Report | What it answers |
 |--------|-----------------|
-| **`aureport --avc`** | *Which domains are denying what right now?* |
-| **`aureport --summary`** | *How many denials did the policy block per domain?* |
-| **`aureport --failed`** | *Which actions failed, and what was the target?* |
+| **`aureport --avc`** | *Which AVCs fired, in order?* — one row per event, with the subject and the target. |
+| **`aureport --summary`** | *How much did the policy block in total?* — the main summary report, with a `Number of AVC's` line. |
+| **`aureport --failed`** | *Which syscalls failed, and what was the target?* |
 
-`aureport --summary` is the first thing you look at in a soak report — it
-numbers each domain's denials. The per-domain totals are what the
-`soak_monitor.yml` compares against the marker's deploy epoch.
+The soak path does its own counting, per domain rather than in total: `scripts/lib/avc_query.sh` converts the marker's epoch with `avc_epoch_to_ts` (epoch seconds are not a valid `-ts` value) and then runs `ausearch --input-logs -m AVC,USER_AVC,SELINUX_ERR,USER_SELINUX_ERR -ts "<MM/DD/YYYY HH:MM:SS>" --subject <domain> --format raw`, counting the `type=AVC` lines. **That** is the number the soak gate compares against the marker's deploy epoch — `aureport` is for reading, not for gating.
 
 ## Reconstructing an event
 
@@ -90,17 +100,18 @@ An AVC alone tells you *what was attempted, by which domain, on which target,
 and whether it was blocked*. It does not tell you what happened before,
 what happened after, or who started it.
 
-The audit serial is the thread. Each `msg=audit(…:N):` carries the same
-number `N` across every event in the syscall record. Follow it:
+The audit serial is the thread. Every record that belongs to one syscall carries the same number in `msg=audit(…:N):` — the AVC, the `SYSCALL`, the `CWD`, the `PATH`. Take the number from the AVC and ask for the whole event:
 
 ```bash
-$ ausearch --start 2026/09/17 14:00:00 -m avc --uid 0
+$ ausearch -m avc -ts recent | head -n 1
+type=AVC msg=audit(1758110412.417:844): avc:  denied  { write } for  pid=4123 comm="report" ...
+#                                        ^^^ event id 844
+
+$ ausearch -a 844 -i
+# every record that shares event id 844: the SYSCALL that made it, the PATH it touched, the CWD it ran from
 ```
 
-The `uid=0` filter is the privilege pivot — every event that fired under root
-is the same thread. The syscall record is the full action chain: the
-`execve` that launched the process, the `open` that reached the target, the
-`exit` that finished it. The AVC alone is the *access vector cache* — one
+`-a` is the event id, and it is the only filter that returns the whole action chain. An added `--uid 0` narrows the same search to events that ran as root — useful when the denial arrived from a `sudo` session, useless as a correlation of its own. The syscall record is the full action chain: the `execve` that launched the process, the `open` that reached the target, the `exit` that finished it. The AVC alone is the *access vector cache* — one
 decision, recorded once, at the moment of conflict. The full audit record
 is the *event* — one operation, recorded every step.
 
@@ -118,23 +129,27 @@ instrument.
 
 ## `audit2why`
 
-`audit2why` reads each AVC line, produces the matching `allow` rule, and
-prints why the policy says each denial would happen.
+`audit2why` reads each AVC line and prints *why* the policy refused it — a missing type-enforcement allow, a file whose label is wrong, a boolean that is off, a port whose type was never registered. It does not write policy; `audit2allow` is the tool that prints candidate `allow` rules.
 
 ```bash
-$ audit2why < /var/log/audit/audit.log
+$ ausearch -m avc -ts recent | audit2why
+type=AVC msg=audit(1758110412.417:844): avc:  denied  { write } for  pid=4123 comm="report" name="audit" ...
+	Was caused by:
+		Missing type enforcement (TE) allow rule.
+
+		You can use audit2allow to generate a loadable module to allow this access.
 ```
 
-It does the translation for you — takes a `scontext`/`tcontext`/`tclass`/
-`permission` tuple and turns it into the human-readable rule that would
-grant it. That is what it does, and that is why it needs a human decision
-afterwards.
+The classification is the useful part. The repository reads it the same way: `cli/tune_report.py` sorts each `audit2why` answer into `boolean`, `label`, `port`, or `te`, and compares that against the verdict its own classifier reached — when the two disagree, the report says so rather than papering over it.
+
+```bash
+$ bash scripts/dev_generate_policy.sh --tune-report --app-name tomcat
+```
 
 The mechanics live in earlier chapters — Chapter 6 covers the module files and the install path,
 Chapter 8 covers every `allow` rule, Chapter 5 covers the permissive-versus-enforcing decision, and
-Chapter 9 takes the label lifecycle. `audit2why` is the translation step
-between the log and the policy — every rule it generates is a candidate for
-the generator's PR.
+Chapter 9 takes the label lifecycle. `audit2why` is the translation step between the log and the
+policy — what `audit2allow` prints for the same tuple is the candidate the generator's PR carries.
 
 ## Evidence for two audiences
 
@@ -147,7 +162,7 @@ An incident review needs: *what happened, when, to which process, under which
 context, and when is it still visible*.
 
 ```bash
-$ ausearch -m avc --subject shopapi_t --start 2026/09/17 14:00:00 -i
+$ ausearch -m avc --subject shopapi_t -ts this-week -i
 ```
 
 Each line returns the serial, the timestamp, the subject, the target, and
@@ -155,7 +170,7 @@ the operation. Pair each line with a retention note:
 
 - retention window is `max_log_file × num_logs`.
 - on wrap, the oldest records go.
-- on `disk_full_action=SINGLE`, the records are locked and unavailable.
+- on `disk_full_action=SUSPEND` (the shipped default), the writes stop and the records that would have been written are gone — the host keeps running while the trail stops.
 
 ### Policy PR
 
@@ -163,21 +178,30 @@ The policy generator needs: *each unique denials tuple, deduplicated, with
 the manifest paths that triggered them*.
 
 The repository's export path is the pipeline already in `monitor_avc.sh`
-and `lib/avc_query.sh`. Each step is named and ordered.
+and `lib/avc_query.sh`. These are sourced shell functions, not commands on
+`PATH`, so the entry point is the script that sources them:
 
 ```bash
-# Step 1: capture
-$ bash scripts/monitor_avc.sh --domain shopapi_t --paths /var/lib/myapp,/var/log/myapp
-# Step 2: filter the captured lines by the manifest paths
-$ avc_filter_lines_by_paths "/var/lib/myapp,/var/log/myapp" shopapi_t
-# Step 3: export
-$ export_app_avcs_to_file shopapi_t
-# Step 4: subtract what the installed policy already allows, and see what is left
+# The whole export in one command — what dev_generate_policy.sh runs for you:
+$ bash scripts/dev_generate_policy.sh --skip-export --app-name shopapi \
+    --avc-log policy_out/avc.log          # operates on a log you already captured
+$ bash scripts/dev_generate_policy.sh   # capture + classify, on rhel-qa
+
+# Reading the library directly (source it first):
+$ source scripts/lib/avc_query.sh
+# export_app_avcs_to_file OUTFILE [SINCE_TS] PRIMARY_DOMAIN [BACKEND_DOMAIN] PATHS_CSV
+$ export_app_avcs_to_file policy_out/avc.log boot shopapi_t shopapi_backend_t /var/lib/shopapi,/var/log/shopapi
+
+# Then subtract what the installed policy already allows, and see what is left:
 $ python3 cli/verify_avc_coverage.py \
     --avc-log policy_out/avc.log \
     --te selinux/myapp.te \
     --manifest config/myapp.manifest.yml
 ```
+
+`monitor_avc.sh` is the daily soak view of the same library: it runs the same
+`ausearch --input-logs -m AVC,USER_AVC,SELINUX_ERR,USER_SELINUX_ERR --subject
+<domain> --format raw` query and reports the count against `--max-net-new`.
 
 `cli/avc_preprocess.py` does the merge, dedupe and subtract work, but it is a
 module: the commands above are the entry points that call it
@@ -208,7 +232,9 @@ labels changed under which user, regardless of SELinux.
 ### execve accounting
 
 ```bash
-$ auditctl -a exit,always -f 4 -k execve
+$ auditctl -a always,exit -F arch=b64 -S execve -k execve
+# Same rule for 32-bit binaries on a 64-bit host:
+$ auditctl -a always,exit -F arch=b32 -S execve -k execve
 ```
 
 The `execve` accounting rule captures every process spawn. That is the
@@ -243,15 +269,14 @@ question; every other question lives in the audit record, not in the policy.
 
 ::: try host-side audit reading
 
-Run these on a RHEL host. Each line is host-only state — each one changes
-the machine once.
+Run these on a RHEL host. The first two only read the log; the `auditctl` pair writes and then undoes one piece of host state.
 
 ```bash
 $ ausearch -m avc -ts today | tail
-# Top-of-today's denials — no filter, every denial today.
+# The last few denials from today — no filter, every denial the log holds.
 
-$ aureport --avc --summary
-# Per-domain denial counts — what the soak report numbers against.
+$ aureport --summary | grep -i "AVC"
+# Total AVCs in the whole log — the fast sanity number, not the per-domain one.
 
 $ auditctl -w /tmp/soak-scratch -p wa -k soak-scratch
 # Adding a watch rule on /tmp/soak-scratch. It captures every access, regardless of context.
@@ -261,26 +286,21 @@ $ auditctl -W /tmp/soak-scratch
 ```
 
 Each step produces state. `tail` on `ausearch` shows you what was today's
-last denial. `aureport --summary` shows you the per-domain totals. `auditctl
+last denial. `aureport --summary` totals the log. `auditctl
 -w` adds a watch rule — every access to the path is now captured by audit,
 regardless of domain or policy. `auditctl -W` removes it — the state change
 is undone.
 
 :::
 
-:::: why each command produces state — each produces the answer to a question
-The AVC alone is *what was attempted*; the audit record is *what happened*. Each has a different audience, each needs a different form, each is the same story in different language. `ausearch` and `aureport` read the kernel's decision back into a form humans can reason about; each query selects a different lens. `auditctl -w` adds a watch rule — that is the state change, every access to the path is now captured by audit regardless of domain or policy; `auditctl -W` removes it — the state change is undone. Each step produces evidence; each step produces the answer to a question about the same log.
+:::: why watch rules and AVCs are different instruments
+The AVC is *what the policy refused*; the watch and execve rules are *what happened*, whether or not the policy was consulted. A `restorecon` that relabels a tree fires the watch rule and writes no AVC; a `setsebool` that flips an allow turns the next access into a success and leaves the AVC count unchanged. Each instrument answers a different question about the same log.
 ::::
 
 ## What you can do now
 
-The audit pipeline is complete: the kernel emits, `auditd` writes, tools read,
-and each tool answers a different question about the same log. Each setting
-in `/etc/audit/auditd.conf` governs a retention variable; each mis-set value
-hides a denial. Each command shown above — `ausearch`, `aureport`, `audit2why`,
-`auditctl` — produces state; each produces evidence; each produces the
-answer to a question.
-
-Every question is recoverable. The AVC alone is the *what was attempted*;
-the audit record is the *what happened*. Each has a different audience. Each
-needs a different form. Each is the same story in different language.
+- **Read** the pipeline: the kernel emits, `auditd` writes, tools read — and know which component loses events when the disk fills or the queue overflows.
+- **Check** the retention knobs before you need them: `max_log_file × num_logs` is how far back you can see, and `SUSPEND` is how the log goes quiet without an alarm.
+- **Ask** each tool its own question — `ausearch` for the event, `aureport` for the count, `audit2why` for the reason, `auditctl` for what SELinux never saw.
+- **Follow** the event id (`ausearch -a <id>`) rather than the AVC line alone; the syscall record around it is what tells you who started the process and what it did next.
+- **Count** denials the way the soak does, per domain since the deploy epoch, so the number you quote is the number the gate uses.

@@ -35,10 +35,11 @@ The whole picture is legible from the host's CLI. Two commands give you every fi
 
 ```bash title="Process labels on the host"
 # ps -eZ | head -n 5
-LABEL                               PID USER     COMMAND
-system_u:system_r:system_r:s0-s0:c0.c1023     1 root   /usr/lib/systemd/systemd
-system_u:system_r:container_runtime_t:s0-s0:c0.c1023  8812 root   podman run ...
-unconfined_u:unconfined_r:unconfined_r:s0-s0:c0.c1023   8834 root   bash
+LABEL                                                 PID USER COMMAND
+system_u:system_r:init_t:s0                             1 root /usr/lib/systemd/systemd
+system_u:system_r:container_runtime_t:s0             8812 root /usr/bin/podman run --rm ...
+system_u:system_r:container_t:s0:c123,c456           9001 root /usr/bin/crun ...
+unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023 8834 root -bash
 ```
 
 The third field is still the type — that is the enforcement decision. The `s0:c123,c456`
@@ -75,19 +76,12 @@ The two flags do not mean the same thing, and they share a single documented pur
 
 | Suffix | What it does | When it is wrong |
 |---|---|---|
-| **`:z`** | relabels every file under the host path with the container's category list, *for every container* that mounts it read-write | a path also used by a host service (the service will fail once its label is a container's) |
-| **`:Z`** | relabels every file under the host path for *this one container only*, leaving the label on the path compatible with host use | a directory shared with a host service that was not told about the container |
+| **`:z`** | labels the content with a **shared** content label — every container that mounts the path read-write can use it | a path also used by a host service (the service will fail once its label is a container's) |
+| **`:Z`** | labels the content with a **private, unshared** label — only this container can use it | a path a second container must also read (the second container is locked out), or a path a host service uses |
 
-The first row — `:z` — is the simplest cutover: the mount becomes readable by every
-container that takes the same category list. The second row — `:Z` — is the one that
-looks right for shared storage but breaks the shared host service the path also serves.
-The `podman-run` reference warns explicitly about both: *do not relabel system files and
-directories; relabeling system content might cause other confined services on the machine
-to fail*.
+The first row — `:z` — is the one for shared storage: any container that mounts the same path keeps working, which is exactly why it is wrong for a path a host service also reads. The second row — `:Z` — is the private answer: only the current container can use the content, so a second container and a host service both lose access. The `podman-run` reference states both plainly: *the `z` option tells Podman that two or more containers share the volume content … the `Z` option tells Podman to label the content with a private unshared label. Only the current container can use it* — and it warns against relabelling system files and directories, because *relabeling system content might cause other confined services on the machine to fail*.
 
-The correct alternative when a path is already used by a host service is to label the path
-with a dedicated type, run `restorecon`, then mount `host:/host:/containers_var_lib_t:z`
-against the path you now control. The result is a relabel of something you own.
+The correct alternative when a path is already used by a host service is to stop relabelling it: give the path its own type (`semanage fcontext -a -t <app>_var_lib_t '/srv/shared(/.*)?'`, then `restorecon -Rv /srv/shared`), and let policy grant the container access to that type — a `container_t` allow you review, or a type produced by `udica`. The label stays yours; the host service keeps the context it had.
 
 ## Options that widen the boundary
 
@@ -98,7 +92,7 @@ decision worth writing down.
 |---|---|---|
 | `--security-opt label=type:<type_t>` | run the container under a *custom* process type (e.g. the module produced by `udica`) | the host's container domain no longer applies; an audit reads the new type and must decide whether that type's rules still hold |
 | `--security-opt label=disable` | turn off label separation between containers (e.g. a sidecar that must share another container's files) | *both* containers share the same level; every file each container wrote is visible to every other container on the same host |
-| `--privileged` | full root-equivalent capabilities inside the container | the process inside the container is also `unconfined_t` on the host's policy — every check the chapter is about goes away |
+| `--privileged` | full root-equivalent capabilities inside the container | the container also stops transitioning into the `container_t` domain — every check the chapter is about goes away |
 
 Each is the deliberate answer to a real question — a sidecar needs to reach a file,
 or an operator needs to mount `/dev` — and each is the answer to *which* check goes away.
@@ -127,11 +121,7 @@ receives those values and passes them to the kernel when it starts each containe
 | `spec.securityContext.seLinuxOptions.type` | the process type for every container in the Pod | `securityContext` on the Pod |
 | `spec.securityContext.seLinuxOptions.level` | the category list for every container in the Pod | `securityContext` on the Pod |
 
-The Kubernetes documentation notes that on the *Restricted* Pod Security Standard, setting
-`spec.securityContext.seLinuxOptions.type` is the restricted field — only the platform
-operator may pick the type for a workload; users supply the level. That means the *type*
-is almost always the platform's `container_t`, and the *level* is the per-Pod category
-([Configure a Security Context, Kubernetes docs](https://kubernetes.io/docs/tasks/configure-pod-container/security-context)).
+The Kubernetes documentation notes that under the **Restricted** Pod Security Standard the SELinux *type* is a restricted field: it may be undefined or one of the allowed container types — `container_t`, `container_init_t`, `container_kvm_t`, `container_engine_t` — while a custom SELinux user or role is forbidden outright. The *level* is not restricted, so users may still supply it. In practice the type is the platform's `container_t` and the *level* is the per-Pod category ([Pod Security Standards, SELinux row](https://kubernetes.io/docs/concepts/security/pod-security-standards/)).
 
 The runtime's default is usually the right answer: every container on the node receives a
 unique level from the scheduler, each Pod's namespace is still a stranger to every other
@@ -169,11 +159,11 @@ host's domain is still the one that decides.
 |---|---|---|---|
 | `container_t` | the runtime's default domain for every container on the host | every container shares the same type — only categories separate them | default; accept it as long as the per-container level is unique |
 | MCS categories (`s0:c123,c456`) | each container's files and processes as a stranger to every other container on the host | each container takes a per-run category list that the policy has to know about | every container on every host, automatically |
-| `:z` on a bind mount | every file under the host path is readable by every container that shares the category list | the host path's label is rewritten for all containers; a host service that also uses the path will inherit the new label | a directory used by only one workload |
-| `:Z` on a bind mount | the host path is readable by *this one* container only, leaving the host service's label alone | the host path's label is rewritten for only this container; if the path is shared between containers the second one will fail | a directory shared with a host service, with a single workload consuming it |
+| `:z` on a bind mount | the path carries a shared content label — every container that mounts it can read and write | the host path's label is rewritten for all containers; a host service that also uses the path will inherit the new label | a directory used by several containers and no host service |
+| `:Z` on a bind mount | the path carries a private, unshared label — only this one container can use it | the host path is locked to that container; a second container, and any host service, is denied | a directory used by exactly one container |
 | `--security-opt label=type:<type_t>` | a custom process type that bypasses the generic `container_t` policy | you now own the allow chain for that type; every access the type makes is your audit | a container with a need to reach a specific type — usually via `udica` |
 | `--security-opt label=disable` | both containers share the same level — each can read the other's files | every file each container wrote is visible to every other container on the host | a sidecar pattern that must share another container's file tree |
-| `--privileged` | full root-equivalent capabilities inside the container, and the host policy sees `unconfined_t` | every check the chapter is about goes away | an operator need that no less-powerful option satisfies |
+| `--privileged` | full root-equivalent capabilities inside the container, and no transition into `container_t` | every check the chapter is about goes away | an operator need that no less-powerful option satisfies |
 | `seLinuxOptions.type` | the process type for each Pod on the cluster — usually `container_t` | the platform picks the type; only the operator can supply one for a workload | every Pod, by default; supply one only when you own the allow chain |
 | `seLinuxOptions.level` | the category list for each Pod on the cluster — the scheduler picks each | each Pod's level is unique — each Pod's files are a stranger to every other Pod | every Pod; accept the default unless you need a cross-Pod share |
 
@@ -194,9 +184,9 @@ host's domain is still the one that decides.
 Nothing changes state; you only set the vocabulary.
 
 ```bash title="Inspect a running container's label"
-# ps -eZ | grep container
-system_u:system_r:container_t:s0:c230,c456   1 root   /usr/bin/conmon ...
-system_u:system_r:container_runtime_t:s0:c230,c456 8812 root   podman ...
+# ps -eZ | grep -E 'container_t|container_runtime_t'
+system_u:system_r:container_t:s0:c230,c456           1 root   /usr/bin/python3 -m http.server
+system_u:system_r:container_runtime_t:s0          8812 root   /usr/bin/conmon --api-version 1 ...
 ```
 
 ```bash title="Compare :z versus :Z on a bind mount"

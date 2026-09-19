@@ -17,7 +17,7 @@ The readiness check is a tuple of four values, and the gate at `scripts/check_so
 | **Ownership** | Who watches a denial that slips past soak and shows up in production | The on-call admin with `emergency_rollback.yml` signed off, the app team with the deploy report JSON |
 | **Reversibility** | How fast the domain can return to permissive after enforce | `emergency_rollback.yml` sets permissive first; `dnf downgrade` follows if `rollback_dnf_version` is set |
 
-The gate at §12.5 of the production runbook makes all three measurable pieces a single JSON payload from `collect_soak_facts.sh`. A deploy report file at `/var/lib/myapp/selinux_deploy_report.json` — written by the canary, enforce, and rollback playbooks — carries the same four values as `status`, `endpoints_exercised`, `domain_context_verified`, and the context map. The operator reads that file before every enforce; not the other way around.
+The gate at §12 of the production runbook makes all three measurable pieces a single JSON payload from `collect_soak_facts.sh`. A deploy report file at `/var/lib/myapp/selinux_deploy_report.json` — written by the canary, enforce, and rollback playbooks — carries the same four values as `status`, `endpoints_exercised`, `domain_context_verified`, and the context map. The operator reads that file before every enforce; not the other way around.
 
 ## The phases, each one's claim and each one's limit
 
@@ -41,10 +41,10 @@ The soak minimum is a function of three values: the calendar, the policy delta, 
 | Duration | What it buys | What shorter one risks |
 |----------|--------------|------------------------|
 | **7 days** (default `soak_min_days` in `ansible/roles/selinux_pac/defaults/main.yml`) | Captures the weekly cron that runs every Tuesday, logrotate that rotates Friday night, cert renewal that wakes the daemon. | The gate treats 0 days as the lab default on `rhel-qa`; production inventory forces `soak_min_days: 7` and refuses to run enforce when the variable is anything else. |
-| **14 days** (tiered up via `--auto-tier`) | Every scheduler in your stack has run at least twice, and a denial in the second cycle would not hide behind "first boot." | A week is one cycle; if nothing broke in cycle 1, cycle 2 is where the feature that never saw traffic quietly shows up. |
+| **14 days** (`--min-days 14`, an operator decision) | Every scheduler in your stack has run at least twice, and a denial in the second cycle would not hide behind "first boot." | A week is one cycle; if nothing broke in cycle 1, cycle 2 is where the feature that never saw traffic quietly shows up. |
 | **Weekend inclusion** | Business-hours-only monitoring can miss jobs that fire Saturday at 3 AM. | One clean week under load, a broken rollout when the job reruns on Saturday. |
 
-The lab default of zero days is disqualified for production by the inventory itself — `ansible/roles/selinux_pac/defaults/main.yml` sets `soak_min_days: 7` and the enforce role refuses to run until the gate reports `days_elapsed >= 7`. The same script accepts `--auto-tier` to raise that floor when the blast-radius classifier reports a higher tier; fail-closed, it keeps the configured minimum if the classifier itself errors or cannot read the inputs.
+The lab default of zero days is disqualified for production by the inventory itself — `ansible/roles/selinux_pac/defaults/main.yml` sets `soak_min_days: 7` and the enforce role refuses to run until the gate reports `days_elapsed >= 7`. The same script accepts `--auto-tier`, which **replaces** the configured floor with the blast-radius classifier's count instead of comparing against it: 1 day for a delta that touches only module-private types, 3 for a refpolicy or non-module target, 7 for an entrypoint or base-type change. Read the direction carefully — tiering can *lower* the floor (a medium delta on a host configured for 7 days soaks for 3), and the classifier's ceiling is the same 7 the defaults already carry, so it can never extend a soak. A longer soak is an explicit `--min-days 14`. When the classifier errors or cannot read its inputs, the script keeps the configured floor and says so.
 
 Why a soak at all then, if permissive mode already runs the service without blocking anything? The answer is in the gate itself: `soak_max_net_new: 0` in the same defaults file — a net-new access need against installed policy is a fail condition regardless of whether the service appeared healthy. The raw AVC count is informational; duplicates from cron that fire every night would have rejected the gate before net-new was invented.
 
@@ -54,11 +54,11 @@ Three checks show up most often in the failure card — each one is one command,
 
 | Check | Why it matters | What it looks like when it fails |
 |-------|----------------|----------------------------------|
-| **Path labeling at deploy time** — `verify_file_contexts.sh` dry-run before `systemctl restart` | `semodule -i` installs types; existing files keep their old contexts. Restart without relabeling lets the service start as `unconfined_t` while the policy was never actually applied. | `restorecon` would change `/var/log/myapp/data.log`. `verify_file_contexts.sh` emits `[ERROR] restorecon dry-run would change:`. |
-| **Systemd unit attestation** — `systemctl is-active` plus HTTP probe, plus domain context | A mislabeled entrypoint (`init_t`) can pass all HTTP gates with zero AVCs while the custom policy was never applied. `domain_context_verified: true` in the deploy report is the answer. | `/health` returns 200; `ps -eZ | grep myapp` shows the process in `init_t` or `myapp_backend_t` — not in `myapp_t` or `myapp_backend_t` as the manifest declared. |
+| **Path labeling at deploy time** — `verify_file_contexts.sh` dry-run before `systemctl restart` | `semodule -i` installs types; existing files keep their old contexts. Restart without relabeling lets the service start as `unconfined_t` while the policy was never actually applied. | The script prints `Mislabeled paths under <dir> (restorecon would change):` followed by the `restorecon -Rv -n` lines, then `File context verification failed — run restorecon before restarting the service`. |
+| **Systemd unit attestation** — `systemctl is-active` plus HTTP probe, plus domain context | A mislabeled entrypoint (`init_t`) can pass all HTTP gates with zero AVCs while the custom policy was never applied. `domain_context_verified: true` in the deploy report is the answer. | `/health` returns 200 and no AVC is written, while `ps -eZ \| grep myapp` shows the process in `init_t` or `unconfined_service_t` instead of the manifest's `<app>_t`. Zero AVCs plus a green probe is the signature: an unconfined or mislabeled domain never asks the policy a question. |
 | **Daily AVC review across the scheduler domain** — `monitor_avc.sh` for `logrotate_t`, monitoring agents, `cron_t` | Root crontab runs as `cron_t`; HTTP probes on `shopapi_t` exercise the log path but never exercise `logrotate_t`. The gate at §3.5 requires that scheduler AVCs are captured and extended before enforce. | `net_new_count` > 0 during soak, or `net_new_count = 0` because `ausearch -ts recent` ran for ~10 minutes before logrotate rotated the logs, and the denial dropped into a new file. |
 
-The rule in §5 of the best practices document: `ausearch --input-logs --subject myapp_t` counts rotated logs; `--input-logs` is what prevents the false "zero AVCs" from a seven-day soak where only the active file is grepped.
+The rule in §5 of the best practices document: `ausearch --input-logs --subject myapp_t` is how the scripts query the audit trail from a cron job or a playbook. `--input-logs` tells `ausearch` to take the log location from `auditd.conf` instead of relying on stdin or the default path — it is about *where* the search reads from, not about rotation; `ausearch` walks the rotated files in the log directory either way. The false "zero AVCs" that a long soak can produce comes from a skewed clock, not from rotation, which is why the repo converts the marker's epoch with `avc_epoch_to_ts` rather than using `-ts recent`.
 
 ## Canary groups and blast radius
 
@@ -72,9 +72,9 @@ inventory.production.yml
 
 The `canary` group is one node. The `production` group is the rest. The first run targets `canary`; the second run targets `production`. The difference between the two is one `--limit` switch on the controller.
 
-The blast-radius classifier, `scripts/classify_policy_blast_radius.sh`, reads the base `.te`/`.fc` and the candidate, and answers three things the operator needs: which tier of soak this delta owns (`low`, `medium`, or `high`), how many days that tier requires, and the reason — usually "over-permissive allows across a category type." The script is gated on the fixture set under `tests/fixtures/blast_radius/`; changing tier logic without updating fixtures and passing `make test-fixtures` breaks the gate.
+The blast-radius classifier, `scripts/classify_policy_blast_radius.sh`, reads the base `.te`/`.fc` and the candidate, and answers three things the operator needs: which tier of soak this delta owns (`low`, `medium`, or `high`), how many days that tier requires (`1`, `3`, `7`), and the reason — one of "Only module-private types changed", "Refpolicy interface or non-module type expansion detected", "Direct allow on base policy type detected", or "Entrypoint permission added". The script is gated on the fixture set under `tests/fixtures/blast_radius/`; changing tier logic without updating fixtures and passing `make test-fixtures` breaks the gate.
 
-When the classifier returns a `medium` tier, `check_soak_ready.sh --auto-tier` raises the minimum soak floor from 7 to the classified count — fail-closed if the classifier itself errors or cannot read its inputs. The operator does not eyeball the delta; the classifier reads it, and the playbook trusts the output.
+With `--auto-tier`, `check_soak_ready.sh` adopts the classified count as the minimum — it does not take the larger of the two. Fail-closed applies to the classifier's error paths: when it cannot run or cannot read its inputs, the gate keeps the configured floor.
 
 The blast radius classifier already told you about the change before you run the script — that is the whole point. `allow myapp_t var_t:file write;` names a category type and is legible as dangerous. `allow myapp_t myapp_var_lib_t:dir write;` names the dedicated type and is legible as safe. The classifier reads the delta between the two.
 
@@ -122,7 +122,7 @@ Sometimes the right answer is no policy change at all. The generator refuses JWS
 
 ::: try Run the soak gate against the lab
 
-The invocation below is the same gate the enforce role calls — and the same one documented in the production runbook §12.5 pass/fail examples. Run it on `rhel-qa`, where the checkout exists, the marker file exists, and the operator controls the clock.
+The invocation below is the same gate the enforce role calls — and the same one documented with pass/fail examples in §12 of the production runbook. Run it on `rhel-qa`, where the checkout exists, the marker file exists, and the operator controls the clock.
 
 ```bash
 cd /home/<user>/selinux-pac
@@ -134,7 +134,7 @@ bash scripts/check_soak_ready.sh \
 
 The expected output, each line:
 
-```json
+```text
 [INFO] Soak: 8 day(s) elapsed (minimum 7)
 [INFO] Events since canary deploy for myapp_t: 0 (maximum 0)
 [INFO] Soak gate passed — safe to enforce myapp_t
@@ -142,16 +142,16 @@ The expected output, each line:
 
 A fail case looks like this:
 
-```json
+```text
 [ERROR] Soak period not met — wait 6 more day(s) or use force_enforce=true (break-glass only)
 ```
 
 A pass with tiered minimum looks like this:
 
-```json
-[INFO] Blast-radius tier: high → minimum soak 14 day(s)
-[INFO] Classifier reason: over-permissive allows across var_t
-[INFO] Soak: 14 day(s) elapsed (minimum 14)
+```text
+[INFO] Blast-radius tier: high → minimum soak 7 day(s)
+[INFO] Classifier reason: Direct allow on base policy type detected
+[INFO] Soak: 7 day(s) elapsed (minimum 7)
 [INFO] Events since canary deploy for myapp_t: 0 (maximum 0)
 [INFO] Soak gate passed — safe to enforce myapp_t
 ```

@@ -211,6 +211,11 @@ class Renderer:
             return f"{url}#{anchor}" if anchor else url
         if target.startswith("asset:"):
             return "assets/" + target[len("asset:") :].lstrip("/")
+        if target.endswith(".md") or ".md#" in target:
+            filepart, _, anchor = target.partition("#")
+            slug = Path(filepart).name[:-3]
+            if slug in {entry.slug for entry in self.book.entries}:
+                return f"{slug}.html" + (f"#{anchor}" if anchor else "")
         repo_path = self.repo_relative(target)
         if repo_path is not None:
             path, _, anchor = repo_path.partition("#")
@@ -1126,6 +1131,15 @@ def check(book: Book, book_dir: Path):
                             f"{entry.file}:{line_no}: asset: target does not exist: {path}"
                         )
                     continue
+                if target.endswith(".md") or ".md#" in target:
+                    filepart, _, anchor = target.partition("#")
+                    other = pages.get(Path(filepart).name[:-3])
+                    if other is not None:
+                        if anchor and anchor not in other.ids:
+                            problems.append(
+                                f"{entry.file}:{line_no}: anchor #{anchor} missing in {other.file}"
+                            )
+                        continue
                 if linker.repo_relative(target) is not None:
                     continue
                 if target.startswith("#"):

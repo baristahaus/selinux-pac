@@ -84,9 +84,12 @@ avc:  denied  { name_connect } for  pid=1234 comm="python3"
 ```
 
 The tuple: `myapp_t → http_port_t:tcp_socket name_connect`. The answer is a boolean —
-`httpd_can_network_connect` already toggles this tuple for the default vendor policy; the
-generator emits no `.te` line, sets the boolean via the hint path, and exits 0. The fix
-lands in **the host's boolean state**, not in `selinux/`.
+`httpd_can_network_connect` already toggles this tuple for the default vendor policy. The
+generator emits no `.te` line: it resolves the tuple through the **policy query** path
+(`sesearch`, mocked in the fixture — the curated-hint path is fixture `10-boolean-hint`),
+records `"engine": "boolean_triage"`, and proposes `setsebool -P httpd_can_network_connect on`
+in `host_admin_actions`. It does not run it — the fix lands in **the host's boolean state**,
+where an operator or a playbook sets it, not in `selinux/`.
 
 ## Other fixture families
 

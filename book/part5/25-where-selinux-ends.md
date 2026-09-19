@@ -51,7 +51,7 @@ Both exist. They are different mechanisms. Each lets the layer above it do somet
 
 A concrete example: **binding a privileged port**.
 
-A process that wants to `bind()` to TCP port 443 needs three things. The kernel checks the capability bit: the process must hold `CAP_NET_BIND_SERVICE` in its permitted set. SELinux checks the policy: the domain must own `allow <domain> <domain>:capability net_bind_service;` and `allow <domain> <domain>:tcp_socket name_bind;` (because the socket itself is labelled). If a systemd unit carries `AmbientCapabilities=CAP_NET_BIND_SERVICE`, the kernel bit is set; if the unit also sets `CapabilityBoundingSet=~cap_net_bind_service`, the kernel bit is dropped, and the domain needs no policy allows. Dropping the capability is often the better fix: the process stops asking for it, SELinux never has to say `allow`.
+A process that wants to `bind()` to TCP port 443 needs three things. The kernel checks the capability bit: the process must hold `CAP_NET_BIND_SERVICE` in its permitted set. SELinux checks the policy: the domain must own `allow <domain> <domain>:capability net_bind_service;` and `allow <domain> <domain>:tcp_socket name_bind;` (because the socket itself is labelled). If a systemd unit carries `AmbientCapabilities=CAP_NET_BIND_SERVICE`, the kernel bit is set; if the unit instead sets `CapabilityBoundingSet=~cap_net_bind_service`, the bit is gone — the process can no longer bind 443 at all, and no policy allow is needed because the request itself is gone. Dropping the capability is often the better fix: the process stops asking for it, and SELinux never has to say `allow`.
 
 ::: why Always drop the capability before adding the allow
 Before you add `allow myapp_t myapp_t:capability net_bind_service;` to the module, check whether the systemd unit still needs it. `CapabilityBoundingSet=~cap_net_bind_service` or `AmbientCapabilities=` is the fix; the policy allow is the symptom. The review in Part III catches both.
@@ -61,7 +61,7 @@ Before you add `allow myapp_t myapp_t:capability net_bind_service;` to the modul
 
 `SystemCallFilter=` and `NoNewPrivileges=` complement a policy module in one direction: the unit already refuses the operations that the policy would have to allow. A unit that drops privileges needs fewer allows, because the unit owns the denial; the policy covers only what the unit did not already refuse.
 
-A unit with `SystemCallFilter=~@clock @debug @mount @raw_io @signal @cpu @module @filesystem @network @user` refuses every syscall the policy would need to allow; a unit with `ProtectSystem=strict` refuses every directory the policy would need to label. Read the unit before writing allows — [§3 of *Designing a Domain*](../part2/11-designing-a-domain.md) explains the trade-off, and the repo's `init_daemon_domain` interface stands for each block of review it expands to.
+A unit with `SystemCallFilter=~@clock @debug @mount @raw-io @signal @cpu-emulation @module @file-system @network-io @privileged` refuses every syscall the policy would need to allow; a unit with `ProtectSystem=strict` refuses every directory the policy would need to label. Read the unit before writing allows — [§3 of *Designing a Domain*](../part2/11-designing-a-domain.md) explains the trade-off, and the repo's `init_daemon_domain` interface stands for each block of review it expands to.
 
 When both are in play, who removes which denial? The unit's denial lands first: if `SystemCallFilter` refuses the call, the kernel does not reach SELinux. If SELinux refuses the tuple, the unit's denial is already silent — the policy allows, the unit allows, the call completes. Each layer owns the call the next layer does not see. That is why `systemctl cat <unit>` before `sesearch` is the single most expensive command in the playbook.
 
@@ -85,7 +85,7 @@ Each line you find is the reason the policy needs fewer allows. The unit tells t
 
 AppArmor is path-based: the profile lists paths (`/usr/sbin/apache2`, `/etc/apache2/*`) and the kernel asks each operation against those paths. The profile reads like a file listing and ships on Debian and Ubuntu distributions as the default LSM. AppArmor is good at: environments where a single binary has a single profile, and the sysad remembers each path.
 
-SMACK is a minimal LSM: one attribute per process and per file, and the attribute is the only decision. The kernel ships it; Mobile Nethack and Sailfish OS use it as the default. SMACK is good at: environments where trust is binary — a process and a file each carry one attribute, and that attribute is the only decision.
+SMACK is a minimal LSM: one attribute per process and per file, and the attribute is the only decision. The kernel ships it; Tizen and Sailfish OS use it as the default. SMACK is good at: environments where trust is binary — a process and a file each carry one attribute, and that attribute is the only decision.
 
 This book teaches SELinux for RHEL because RHEL ships with SELinux as the default, the policy module model is code, the review-gate model in Part III is built around it, and the type-based isolation fits the distribution's threat model. AppArmor and SMACK are each the right design for a different distribution; the choice is the distribution, not the algorithm.
 
@@ -99,11 +99,11 @@ The review gates in Part III — `forbidden-patterns`, `version-consistency`, `v
 A policy module that is written, compiled, reviewed and packaged is not "policy". It is code that has a version, an author, and a review. A module that is installed in production is every bit as important as the application it protects.
 :::
 
-## Three AVCs, three owning layers
+## Three failures, three owning layers
 
-Each AVC is a tuple. The tuple names the layer that owns the failure. The failure you fix depends on that layer.
+Each layer leaves its own evidence. Read the evidence and the owning layer names itself — the fix belongs to that layer, not to the one you were paged about.
 
-### Scenario 1 — application behaviour
+### Scenario 1 — the policy, and then the application
 
 ```text
 avc: denied { write } for pid=4123 comm="report" name="audit"
@@ -112,29 +112,43 @@ avc: denied { write } for pid=4123 comm="report" name="audit"
   tclass=file permissive=0
 ```
 
-The domain wants to write to the host's `auditd` log. The owning layer is the **application**: the report process is writing to a file that the policy already labels as `auditd_log_t`, but the policy does not allow `report_t` to write there. Fix: check whether the application really needs to write to `auditd_log_t` — or whether the operator is writing to the wrong destination.
+An AVC exists, so the kernel decision that said no was SELinux's: `report_t` has no allow to write `auditd_log_t`. The **policy** owns the denial — and the application owns the question behind it: does the report process really have to write into the host's audit log, or is the destination wrong? Fix the destination and no allow is needed; add `allow report_t auditd_log_t:file write;` and the write is permitted forever. The denial is the policy's; the correct fix is often the application's.
 
-### Scenario 2 — unit hardening
-
-```text
-avc: denied { connect } for pid=891 comm="myapp" scontext=system_u:system_r:myapp_t:s0 tcontext=system_u:system_r:backend_t:s0 tclass=tcp_socket permissive=0
-```
-
-The domain tries to `connect` to `backend_t` on a TCP socket. The owning layer is the **systemd unit**: the unit's `SystemCallFilter` refuses `@network`, so the call never reaches SELinux — the `connect` would fail even with a policy allow. Fix: relax `SystemCallFilter` to allow the connection, or label the call path as `@db` and let `@network` remain closed.
-
-### Scenario 3 — authentication
+### Scenario 2 — unit hardening (no AVC)
 
 ```text
-avc: denied { name_connect } for pid=2048 comm="shopapi" daddr=10.0.0.5 dport=443 scontext=system_u:system_r:shopapi_t:s0 tcontext=system_u:object_r:unreserved_port_t:s0 tclass=tcp_socket permissive=0
+$ ausearch -m avc -ts recent
+<no matches>
+
+$ journalctl -u myapp -n 1 --no-pager
+myapp[891]: connect to 10.0.0.5:5432 failed: Operation not permitted
+
+$ systemctl cat myapp | grep SystemCallFilter
+SystemCallFilter=~@clock @debug @network-io @privileged
 ```
 
-The domain connects to `10.0.0.5` on TCP 443. The owning layer is the **firewall**: the policy allows `name_connect`, the unit allows the call, but the firewall refuses the flow. Fix: add the host to the allow-list on the firewall, or confirm that the call is the right one.
+The call fails with `EPERM` and **audit.log holds nothing** — SELinux never saw it, because the kernel did not reach the LSM. `SystemCallFilter=~@network-io` dropped the syscall first, so the owning layer is the **systemd unit**. Fix: remove `@network-io` from the deny list for a unit that needs the network, or drop the network need — do not go looking for an allow that cannot exist.
+
+### Scenario 3 — the firewall (no AVC)
+
+```text
+$ curl -sS -m 5 https://10.0.0.5/health
+curl: (7) Failed to connect to 10.0.0.5 port 443: No route to host
+
+$ ausearch -m avc -ts recent
+<no matches>
+
+$ sesearch -A -s shopapi_t -c tcp_socket -p name_connect | head -n 1
+allow shopapi_t unreserved_port_t:tcp_socket name_connect;
+```
+
+The policy allows `name_connect` to the port type, no AVC was written, the unit has no syscall filter — and the packet never leaves. `No route to host` is a `REJECT` rule answering; a `DROP` shows as a timeout instead. The owning layer is the **firewall**. Fix: add the peer to the allow-list on the firewall, or confirm that the call is the right one in the first place.
 
 Each scenario names the layer. Each layer owns the fix.
 
 ## What you can do now
 
-- read any AVC and say which layer owns the failure
+- read any failure — an AVC, an `EPERM` with an empty audit log, a refused flow — and say which layer owns it
 - list every layer that still has a decision about the operation
 - inspect a unit and name each directive that reduces the policy surface
 - tell the difference between a Linux capability and a SELinux `capability` allow
