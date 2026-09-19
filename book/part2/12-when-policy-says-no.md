@@ -123,7 +123,7 @@ if (myapp_allow_backend_connect) {
 }
 ```
 
-A boolean belongs inside one of those blocks when the tuple is a behaviour the administrator wants to control at runtime — a flag that can flip, without recompiling the module. The administrator owns the decision. A rule that is conditional is a rule that is deferential; the admin can say yes or no without changing the binary.
+A boolean belongs inside one of those blocks when the tuple is a behaviour the administrator wants to control at runtime — a flag that can flip, without recompiling the module. In a refpolicy module the boolean is declared before it is used (`gen_tunable(myapp_allow_backend_connect, false)`), and `tunable_policy` gates the rule against it; the `if` form above is the same rule after m4 expansion. The administrator owns the decision. A rule that is conditional is a rule that is deferential; the admin can say yes or no without changing the binary.
 
 [§10 Ports, Booleans and Transitions](../part2/10-ports-booleans-and-transitions.md) covers the full decision surface for booleans and transitions.
 

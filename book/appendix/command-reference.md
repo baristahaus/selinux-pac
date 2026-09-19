@@ -35,7 +35,7 @@ These commands each show a different side of the label surface.
 | `ps -eZ` | All running processes: domain (third field), role, user, level | `rhel host` |
 | `id -Z` | Your own shell's context — useful when you are debugging a user-space failure | `rhel host` |
 | `getfattr -n security.selinux <path>` | The extended-attribute value the file actually holds, even if `ls -Z` cannot see it | `rhel host` |
-| `matchpathcon -p <kind> <path>` | "What label **should** this path have", per /etc/selinux/<type>/contexts/files/ — the answer you compare to what is on the box | `rhel host` |
+| `matchpathcon <path>` | "What label **should** this path have", per `/etc/selinux/<type>/contexts/files/` — the answer you compare to what is on the box. `-m <kind>` forces the lookup for a file type (`file`, `dir`, `pipe`, `chr_file`, `blk_file`, `lnk_file`, `sock_file`); `-V` verifies the context on disk against the default and prints only the mismatches | `rhel host` |
 
 :::: note `ls -Z` is the one command you never forget
 Because every access decision names the object's label, `ls -Z` is the most useful command

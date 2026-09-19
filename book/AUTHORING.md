@@ -64,6 +64,10 @@ Not supported: footnotes, setext headings (`===` under a line), HTML comments, d
 | `asset:name.svg` | a file in `book/assets/` | the file must exist |
 | `https://…` | external | not validated |
 
+A link to another chapter written as a repository path (`../part2/09-file-contexts-and-the-label-lifecycle.md`)
+resolves to that chapter's **page**, not to the GitHub copy — any `.md` target whose basename is a
+page in `book.toml` is treated as a chapter link, and its anchor is validated like one.
+
 Cross-chapter anchors are validated, so if you rename a heading you must fix the links to it.
 Prefer adding an explicit anchor (`## Heading {#stable-id}`) for anything another chapter cites.
 
