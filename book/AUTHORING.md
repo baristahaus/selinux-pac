@@ -7,7 +7,8 @@ generator will complain if you get it wrong. The book is built by `tools/book/bu
 ```bash
 make book        # build the site into site/ (gitignored)
 make book-check  # validate: internal links, anchors, repo: targets, markdown subset
-make book-serve  # build, then serve at http://127.0.0.1:8000
+make book-serve  # build, then serve at http://127.0.0.1:8080
+BOOK_HOST=0.0.0.0 BOOK_PORT=9000 make book-serve  # reachable from your phone or another machine
 ```
 
 `make check` runs `book-check` too, so a broken link fails the repository health check.

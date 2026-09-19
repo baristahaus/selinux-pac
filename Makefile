@@ -108,8 +108,11 @@ book: ## Build the HTML manual into site/ (tools/book/build.py)
 book-check: ## Validate the manual: internal links, anchors, repo: references
 	$(PYTHON) tools/book/build.py --check
 
-book-serve: ## Build the manual and serve it at http://127.0.0.1:8000
-	$(PYTHON) tools/book/build.py --serve 8000
+BOOK_HOST ?= 127.0.0.1
+BOOK_PORT ?= 8080
+
+book-serve: ## Build the manual and serve it (BOOK_HOST=0.0.0.0 BOOK_PORT=9000 to share it)
+	$(PYTHON) tools/book/build.py --serve $(BOOK_PORT) --host $(BOOK_HOST)
 
 demo-bootstrap: ## Stand up App A/B + shopapi on RHEL (idempotent; not for macOS)
 	bash scripts/demo_bootstrap.sh

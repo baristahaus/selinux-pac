@@ -6,7 +6,8 @@ without installing anything.
 
     python3 tools/book/build.py                # build into site/
     python3 tools/book/build.py --check        # validate links, anchors, repo refs
-    python3 tools/book/build.py --serve 8000   # build, then serve site/ locally
+    python3 tools/book/build.py --serve 8080   # build, then serve site/ locally
+    python3 tools/book/build.py --serve 8080 --host 0.0.0.0   # ... on every interface
 
 Supported markdown (a deliberate subset; anything else is a build error rather
 than silently dropped content):
@@ -1176,7 +1177,27 @@ def check(book: Book, book_dir: Path):
     return problems, warnings
 
 
-def serve(out_root: Path, port: int) -> None:
+def show_lan_addresses(port: int) -> None:
+    """Print the URLs another device on this network can open."""
+    import socket
+
+    seen = set()
+    for family, _, _, _, sockaddr in socket.getaddrinfo(socket.gethostname(), None):
+        if family == socket.AF_INET:
+            seen.add(sockaddr[0])
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 9))  # no packet sent; just picks the egress address
+        seen.add(probe.getsockname()[0])
+    except OSError:
+        pass
+    finally:
+        probe.close()
+    for addr in sorted(a for a in seen if not a.startswith("127.")):
+        print(f"book:   http://{addr}:{port}/")
+
+
+def serve(out_root: Path, port: int, host: str = "127.0.0.1") -> None:
     import functools
     import http.server
 
@@ -1185,8 +1206,11 @@ def serve(out_root: Path, port: int) -> None:
     )
     # Threaded: a browser that holds a connection open (a paused tab, a slow image)
     # must not block every other request.
-    with http.server.ThreadingHTTPServer(("127.0.0.1", port), handler) as httpd:
-        print(f"book: serving http://127.0.0.1:{port}/ (Ctrl-C to stop)")
+    with http.server.ThreadingHTTPServer((host, port), handler) as httpd:
+        shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+        print(f"book: serving http://{shown}:{port}/ (Ctrl-C to stop)")
+        if host in ("0.0.0.0", "::"):
+            show_lan_addresses(port)
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
@@ -1200,6 +1224,11 @@ def main(argv: list) -> int:
     parser.add_argument("--check", action="store_true", help="validate without writing")
     parser.add_argument("--strict", action="store_true", help="treat warnings as errors")
     parser.add_argument("--serve", type=int, metavar="PORT", help="serve the built site")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="interface for --serve (0.0.0.0 to share the book on your network)",
+    )
     args = parser.parse_args(argv)
 
     book_dir = Path(args.book).resolve()
@@ -1229,7 +1258,7 @@ def main(argv: list) -> int:
         print(f"book: built {len(book.entries)} pages into {out_root}")
 
     if args.serve:
-        serve(out_root, args.serve)
+        serve(out_root, args.serve, args.host)
     return 0
 
 
