@@ -70,9 +70,10 @@ $ command        run as your normal user (repo checkout, controller laptop)
 | `chapter-name.md#anchor` | A cross-reference; every link in this book is checked at build time |
 
 ::: warn Permissions and privilege
-Commands marked `#` change policy, labels booleans, or ports on a host. Nothing in Part III or
-Part IV asks you to run such a command on production. If a chapter ever seems to, re-read it —
-chapter 20 is the only place that touches a live host, and it does so through Ansible.
+Commands marked `#` change policy, labels, booleans, or ports on a host. Nothing in Part III or
+Part IV asks you to *change* policy on production by hand: chapter 20's incident card is read-only
+reconnaissance (`getenforce`, `semanage permissive -l`, `ausearch`) followed by Ansible — rollback
+first, then the same PR path as any other change. If a chapter ever seems to ask for more, re-read it.
 :::
 
 ## What you need

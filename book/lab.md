@@ -33,7 +33,7 @@ make check     # fixtures + static validators + linters; no SELinux host require
 ::: good What you should see
 `make check` runs the deterministic fixture suite, the payments and blast-radius suites, the
 manifest validators, the policy linting, and the book link check. You should see `make test OK`
-mid-run, then the lint results, and it ends with `book: OK (31 pages, 0 warnings)`. Any missing
+mid-run, then the lint results, and it ends with a `book: OK (N pages, M warnings)` line — `0 warnings` on a healthy tree. Any missing
 optional linter prints `SKIP` rather than failing — the offline contract is "no network, no
 root, no kernel".
 :::

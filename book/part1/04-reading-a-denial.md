@@ -28,7 +28,7 @@ Each segment is a piece of information. Reading them left to right:
 
 A note on `scontext` and `tcontext`: both are *full* contexts. The four colon-separated fields — user, role, type, level — all travel together, and the type is always the third field. The permissive flag is a per-domain state; the host may still be `Enforcing`. Chapter 5 covers the difference in full; for now, treat `permissive=1` as "this would have broken in Enforcing".
 
-The same shape appears across all three deterministic fixtures. The `12-execmem-review` fixture shows the bare minimum form — no `name`, no `path`, no `dev` or `ino`:
+The same shape appears in every deterministic fixture; here are three of them. The `12-execmem-review` fixture shows the bare minimum form — no `name`, no `path`, no `dev` or `ino`:
 
 ```text
 type=AVC msg=audit(1710000300.000:301): avc:  denied  { execmem } for  pid=1234 comm="java" scontext=system_u:system_r:myapp_t:s0 tcontext=system_u:system_r:myapp_t:s0 tclass=process permissive=1
