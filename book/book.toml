@@ -44,7 +44,7 @@ chapters = [
 
 [[part]]
 title = "Part III. Security as code"
-blurb = "The generator that turns AVC lines into a reviewed diff, the fixtures that pin its behaviour, and the gates that keep a dangerous rule out of main."
+blurb = "The generator that turns AVC lines into a reviewed diff, the fixtures that pin its behavior, and the gates that keep a dangerous rule out of main."
 chapters = [
   { file = "part3/13-from-denial-to-pull-request.md", title = "From Denial to Pull Request" },
   { file = "part3/14-the-verdict-table.md", title = "The Verdict Table" },

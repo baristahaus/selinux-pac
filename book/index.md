@@ -1,8 +1,8 @@
 # SELinux for Developers and Administrators
 
-> SELinux is not a tax on deployment. It is the only part of your RHEL host that still
-> contains an application after the application has been compromised. This book teaches you to
-> read it, write it, test it, review it, and ship it — as code, with evidence.
+> SELinux is not a tax on deployment. It is the only part of your RHEL host that still contains
+> an application after an attacker compromises the application. This book teaches you to read it,
+> write it, test it, review it, and ship it as code, with evidence.
 
 <p class="kicker">Security as code for Linux services</p>
 
@@ -15,13 +15,13 @@ every example runnable, most of them offline</p>
 
 ## What you will be able to do
 
-By the last page you will be able to do all of the following without a search engine and
-without a consultant:
+By the last page you can do all of the following without a search engine and without a
+consultant:
 
 - Read a denial out of `audit.log` and say which rule is missing, in English, in under a minute.
-- Write a policy module — types, `.te`, `.fc`, ports — that is small enough to review and
-  correct enough to compile on the first try.
-- Turn a denial into a **reviewed commit** instead of a command you ran on the production host.
+- Write a policy module with its types, `.te`, `.fc`, and ports. Make it small enough to review
+  and correct enough to compile on the first try.
+- Turn a denial into a reviewed commit instead of a command you ran on the production host.
 - Explain to a change board what a per-domain permissive soak is, how long it runs, and what
   evidence closes it.
 - Roll back a policy that caused an outage without disabling SELinux on the host.
@@ -38,8 +38,8 @@ without a consultant:
 
 ## The story: one denial, one path
 
-The book follows a single denial from the moment a kernel hook refuses it to the moment a
-reviewed module is enforcing in production. Every chapter is a station on that path.
+The book follows a single denial. It starts when a kernel hook refuses the access. It ends when a
+reviewed module enforces in production. Every chapter is a station on that path.
 
 ```mermaid
 flowchart TD
@@ -57,17 +57,17 @@ flowchart TD
 
 Two rules hold for the whole book, and the tooling enforces both:
 
-1. **The host stays in Enforcing mode.** Only the application's own domain is ever made
-   permissive, and only during the canary.
-2. **Production is never mutated by hand.** A denial after ship opens a pull request; it does
+1. **The host stays in Enforcing mode.** Only the application's own domain becomes permissive,
+   and only during the canary.
+2. **Production is never mutated by hand.** A denial after ship opens a pull request. It does
    not start a shell on the production host.
 
 ## The repository you will use
 
 Everything runs against [selinux-pac](https://github.com/anurag-saran/selinux-pac). It is a
-working policy-as-code pipeline: a deterministic generator that reads AVCs, a CI gate that
-refuses dangerous rules, offline golden fixtures, RPM packaging, and the Ansible/AAP promotion
-path. Clone it once, then read [Your Lab](lab.md):
+working policy-as-code pipeline. It holds a deterministic generator that reads AVCs, a CI gate
+that refuses dangerous rules, and offline golden fixtures. It also holds RPM packaging and the
+Ansible/AAP promotion path. Clone it once, then read [Your Lab](lab.md):
 
 ```bash
 git clone https://github.com/anurag-saran/selinux-pac
@@ -75,14 +75,15 @@ cd selinux-pac
 make deps && make check
 ```
 
-`make check` is the book's spine. It runs the deterministic generator against golden
-fixtures, validates the app manifests, and lints the policy — with no SELinux host and, once
-`make deps` has installed the Python requirements, no network. If a chapter claims a behaviour,
-there is usually a fixture under `docs/examples/fixtures/deterministic/` that proves it.
+`make check` is the spine of the book. It runs the deterministic generator against golden
+fixtures, checks the app manifests, and lints the policy. It needs no SELinux host. Once
+`make deps` installs the Python requirements, it needs no network. If a chapter claims a
+behavior, a fixture under `docs/examples/fixtures/deterministic/` usually proves it.
 
 ## How to read this book
 
-Three paths through the material. Take the one that matches the question you arrived with.
+The book has three paths through the material. Take the one that matches the question you arrived
+with.
 
 | Your question | Read |
 |---|---|
@@ -93,7 +94,7 @@ Three paths through the material. Take the one that matches the question you arr
 | "I am on call tonight" | 20 |
 
 ::: note Reading order
-Chapters 1–5 build the mental model and are worth reading in order even if you know RHEL well —
-they are the vocabulary every later chapter assumes. From Part II onward, jump freely; each
+Chapters 1–5 build the mental model. Read them in order, even if you know RHEL well. They are the
+vocabulary that every later chapter assumes. From Part II onward, you can jump freely. Each
 chapter states its own prerequisites in the opening paragraph.
 :::

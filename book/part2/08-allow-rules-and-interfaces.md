@@ -2,7 +2,7 @@
 
 > A rule is a tuple, and a module is a library: you write rules for what your module needs, you
 > publish interfaces so other modules can reach yours without learning its type names. The
-> decision is always `allow source target:class { perms };` — the only syntax the kernel reads.
+> decision is always `allow source target:class { perms };`: the only syntax the kernel reads.
 
 ## The rule, in full
 
@@ -12,9 +12,9 @@ Every allow rule is the same four-slot tuple written in refpolicy syntax:
 allow source target:class { perms };
 ```
 
-Read it as: *processes labeled `source` may perform each `perm` listed against `class` on
+Read it as: *processes labeled `source` can perform each `perm` listed against `class` on
 objects labeled `target`.* A single rule can list any number of permissions inside the braces,
-and each permission is the unit of access — `write` does not imply `create`, `open` does not
+and each permission is the unit of access: `write` does not imply `create`, `open` does not
 imply `getattr`, and a rule listing `read open getattr` on a `dir` is read-only traversal, not
 mutation.
 
@@ -22,36 +22,36 @@ There are two rule shapes you will meet.
 
 | | Syntax | Scope |
 |---|---|---|
-| One permission | `allow src tgt:class perm;` | same tuple; only one slot |
-| Many permissions | `allow src tgt:class { p1 p2 p3 };` | same tuple; grouped for review |
+| One permission | `allow src tgt:class perm;` | same tuple, only one slot |
+| Many permissions | `allow src tgt:class { p1 p2 p3 };` | same tuple, grouped for review |
 
 Both describe the same decision. The only difference is ergonomics for the reviewer. A
-multi-permission rule is the default for net-new access, because it lets you read the rule as a
+multi-permission rule is the default for net-new access. It lets you read the rule as a
 single audit unit instead of a chain of smaller grants that each widen the domain by one.
 
 ## Default deny, stated once
 
 Absence of a matching allow rule is a denial. That is the single rule of refpolicy, repeated in
 every module, enforced by the kernel, and recorded in `audit.log` when the mode is enforcing.
-Chapter 2 restates it as part of the decision tuple; the rest of this chapter assumes the
+Chapter 2 restates it as part of the decision tuple. The rest of this chapter assumes the
 tuple is already the model you use for every denial you read.
 
 ## Direct allows versus interfaces
 
-A **direct allow** names the types that appear in the AVC: it writes `allow shopapi_t
+A direct allow names the types that appear in the AVC: it writes `allow shopapi_t
 shopapi_var_lib_t:dir { search add_name write };` and is correct when every type involved is
 owned by the module that writes it. It is what every module writes about itself.
 
-An **interface** is a refpolicy macro that a module publishes — `list_dirs_pattern`,
-`manage_files_pattern`, `payments_read_public_state` — so that other modules can request access
-to the same object without learning the module's type names. The interface names *intent*; the
+An interface is a refpolicy macro that a module publishes (`list_dirs_pattern`,
+`manage_files_pattern`, `payments_read_public_state`) so that other modules can request access
+to the same object without learning the module's type names. The interface names *intent*. The
 consumer supplies the domain and receives the allow, written in a form the reader can audit as a
 pattern rather than a per-type grant.
 
 The distinction matters at review time. A direct allow on a type the writer owns is legible: it
 names the type, the class, and the exact permission set. An interface call is also legible, but
-legibility lives in the macro definition — the caller does not read the macro body, and the
-body is what a reviewer should open for audit.
+legibility lives in the macro definition: the caller does not read the macro body, and the
+body is what a reviewer must open for audit.
 
 A real interface call and its expansion, from the `payments` module shipped with this book:
 
@@ -73,23 +73,23 @@ interface(`payments_read_public_state',`
 
 A caller writes `payments_read_public_state(myapp_t)` and receives, after the macro expands, the
 allow rules that `myapp_t` needs to read directories and files in
-`payments_var_lib_t` — `list_dirs_pattern` for the directory permissions, `read_files_pattern` for
-the read side. The caller never sees those type names. The publisher does: the `gen_require`
+`payments_var_lib_t` (`list_dirs_pattern` for the directory permissions, `read_files_pattern` for
+the read side). The caller never sees those type names. The publisher does: the `gen_require`
 block inside the `.if` declares them for any module that pulls the interface.
 
 Every published interface carries the same contract as the types it names. The publisher is
 vouching that `payments_var_lib_t` is the right object for the access the consumer asked for.
 That is what `gen_require` makes visible to the module author who has to add it: the types the
 interface reaches into, the classes, the permissions. Treat every published interface as a
-review boundary — read the `gen_require` block and the pattern macros it expands, not just the
+review boundary: read the `gen_require` block and the pattern macros it expands, not just the
 one line that calls it.
 
 ## How to find the right interface
 
 The refpolicy ships with hundreds of pattern macros. Most of them have `*_pattern` in the name
-because they name a bounded set of permissions against a generic type, and they are what you
-should reach for before writing a raw allow. The refpolicy tooling that finds the macro for a
-given AVC is `sepolgen-ifgen`, shipped with `policycoreutils-devel` — it indexes the interface
+because they name a bounded set of permissions against a generic type, and you must reach for
+them before writing a raw allow. The refpolicy tooling that finds the macro for a
+given AVC is `sepolgen-ifgen`, shipped with `policycoreutils-devel`: it indexes the interface
 set into `/var/lib/sepolgen/interface_info` and the Python bindings the generator consumes query
 it. Without it, the generator cannot run interface matching.
 
@@ -104,19 +104,19 @@ The workflow is:
 
 `sesearch` is the most useful of these for review, because it lets you ask *what the vendor policy
 already does* for a given access, instead of guessing whether a new allow is the right fix. Run
-it when the module under review is a dependency of the OS — `httpd_t`, `sshd_t`,
-`postgresql_t` — and the answer tells you which pattern macros the distribution already reached
+it when the module under review is a dependency of the OS (`httpd_t`, `sshd_t`,
+`postgresql_t`). The answer tells you which pattern macros the distribution already reached
 for, and which ones you still need to add.
 
 `seinfo -c` is the structural cousin: it lists the object classes the policy defines, and with
-`-x` it prints the permissions of each one. It always reads a policy — the running one, or the
-file named by `--policy` — so its answer describes what the kernel is actually enforcing, not
+`-x` it prints the permissions of each one. It always reads a policy: the running one, or the
+file named by `--policy`. So its answer describes what the kernel is actually enforcing, not
 what the source tree says. The `sepolicy generate` utility is scaffolding, not audit: it writes
-starter `.te` and `.if` files but never commits them — the reviewed `.if` you publish is authored
+starter `.te` and `.if` files but never commits them. The reviewed `.if` you publish is authored
 by hand.
 
-When `sepolgen-ifgen` is missing — laptop, CI, air-gapped build — the generator prints a banner
-to stderr and still emits verdicts for everything but base-type allow rules:
+When `sepolgen-ifgen` is missing (laptop, CI, or an air-gapped build), the generator prints a
+banner to stderr and still emits verdicts for everything but base-type allow rules:
 
 ```text
 SEPOLGEN INTERFACE MATCHING IS NOT AVAILABLE
@@ -124,7 +124,7 @@ SEPOLGEN INTERFACE MATCHING IS NOT AVAILABLE
 
 Base-type denies (`var_log_t`, `usr_t`, `etc_t`, any of the generic port types) refuse to
 generate a raw allow against them. That is `VERDICT_TOOLCHAIN`. `--allow-degraded` relaxes that
-refusal — but on a host with no policy loaded at all, the boolean check fails closed first and
+refusal. But on a host with no policy loaded at all, the boolean check fails closed first and
 you still see `toolchain_required`, because a generator that cannot ask the policy cannot promise
 the allow is right. Run on this laptop, fixture 09 prints:
 
@@ -133,10 +133,10 @@ the allow is right. Run on this laptop, fixture 09 prints:
                Boolean policy check could not run (No readable SELinux policy …).
 ```
 
-That is the honest answer offline, and it is why the golden `interface`, `direct` and `boolean`
+That is the honest answer offline. It is why the golden `interface`, `direct` and `boolean`
 rows come from the fixture runner instead: `scripts/smoke_test.py` mocks the interface lookup and
 the boolean query, so `make test-fixtures` exercises the verdict logic without a policy. What the
-CLI still proves offline is everything that needs no base-policy query — fixture 01 is `fc_drift`
+CLI still proves offline is everything that needs no base-policy query. Fixture 01 is `fc_drift`
 and exits 0 on this machine, with no SELinux and no sepolgen installed.
 
 `--allow-degraded` is the escape hatch for a host that *has* a policy but no sepolgen: it emits
@@ -146,8 +146,9 @@ the host is missing.
 
 ## House rules
 
-Each rule — which targets are acceptable, which are forbidden, which permission sets collapse
-into pattern macros — is written in `cli/policy_rules.py` and enforced before interface matching.
+Each rule is written in `cli/policy_rules.py` and enforced before interface matching: which
+targets are acceptable, which are forbidden, and which permission sets collapse
+into pattern macros.
 
 ### Targets that are refused
 
@@ -181,7 +182,7 @@ The house rule prefers a relabel over a raw allow against these types.
 | `list_dirs_pattern` | `search read open getattr` |
 
 When a denial carries at least the permission set a pattern macro consumes, the generator prefers
-the macro call over a raw allow — not as an abstraction, but as review. The test is
+the macro call over a raw allow. The reason is review, not abstraction. The test is
 `required <= observed`, so a denial carrying extras still collapses and the extras do not appear
 in the rendered allow. A reviewer reads `manage_files_pattern(myapp_t, myapp_var_lib_t,
 myapp_var_lib_t)` and sees the permission set the macro stands for, without opening the `.if`.
@@ -205,18 +206,18 @@ myapp_var_lib_t)` and sees the permission set the macro stands for, without open
 | `needs_review` | `process`, `transition`, `foreign_domain` | outside this module's code |
 | `needs_review` | `process`, `dyntransition`, `foreign_domain` | outside this module's code |
 
-Each of these is legitimate — a JVM really does need `execmem` for the bytecode loader, a debug
-tool really does need `sys_ptrace`. But each of them weakens the domain in a way that is not
-covered by any single denial: a single denial is the proof that you need the permission.
-`--allow-needs-review` is the flag that lets the generator write one of these into the `.te`;
-the reviewer reads the proof before signing off.
+Each of these is legitimate. A JVM really does need `execmem` for the bytecode loader, and a
+debug tool really does need `sys_ptrace`. But each of them weakens the domain in a way that
+is not covered by any single denial: a single denial is the proof that you need the permission.
+`--allow-needs-review` is the flag that lets the generator write one of these into the `.te`.
+The reviewer reads the proof before signing off.
 
 ## Worked examples
 
 The two fixtures that demonstrate how the generator reaches for each verdict are under
 `docs/examples/fixtures/deterministic/`. Each fixture supplies an AVC line, a mock of `sepolgen`
 that records whether the engine matched an interface or failed, and an `expected.json` that pins
-the verdict. Running the generator against them is what the golden test asserts — *the tool
+the verdict. Running the generator against them is what the golden test asserts: *the tool
 produces these verdicts for these inputs, and only these*.
 
 ### `08-interface-match` — an interface matched
@@ -232,7 +233,7 @@ avc: denied { search } for pid=1234 comm="python3" name="log" path="/var/log"
 
 `var_log_t` is not module-private, but it is a generic file type the generator already knows how
 to reach for. The mock sepolgen reports `behavior: "match"`, and the generator emits
-`list_dirs_pattern(myapp_t)` — the macro whose permission set (`search read open getattr`)
+`list_dirs_pattern(myapp_t)`. The permission set of that macro (`search read open getattr`)
 *contains* the one permission this AVC observed. The expected verdict is `interface` with target
 `var_log_t`:
 
@@ -245,9 +246,9 @@ to reach for. The mock sepolgen reports `behavior: "match"`, and the generator e
 ]
 ```
 
-The rule the generator emits does not name `var_log_t` directly — it names the macro, and the
+The rule the generator emits does not name `var_log_t` directly. It names the macro, and the
 macro names `var_log_t`. That is the contract of an interface: the caller names intent, the
-macro names types. The reviewer's job is to read the macro body, confirm that `var_log_t` is the
+macro names types. The reviewer's job is to read the macro body, check that `var_log_t` is the
 right object for log access in refpolicy, and accept the allow.
 
 ### `09-direct-no-interface` — no macro matched, a direct allow is correct
@@ -262,10 +263,10 @@ avc: denied { read open getattr } for pid=1234 comm="python3" name="notes.txt"
   tclass=file permissive=1
 ```
 
-`usr_t` is generic — the house rule would prefer an `fc_fix` or `fc_drift` and a relabel. It
+`usr_t` is generic, so the house rule prefers an `fc_fix` or `fc_drift` and a relabel. It
 cannot reach for one here: the manifest owns `/opt/myapp`, `/var/lib/myapp`, `/var/log/myapp`,
 `/run/myapp` and `/var/opt/myapp`, and nothing under `/usr/share`, so no root matches this path
-and no `.fc` line is suggested for it. The sepolgen mock reports `behavior: "no_match"` — no
+and no `.fc` line is suggested for it. The sepolgen mock reports `behavior: "no_match"`: no
 refpolicy macro reaches for `usr_t` against `file` with the observed permission set. With no
 interface match, nothing blocks the generation from the classifier's point of view, and the
 verdict is `direct`:
@@ -280,7 +281,7 @@ verdict is `direct`:
 ```
 
 The generated allow reads `allow myapp_t usr_t:file { read open getattr };`. It names the types
-the AVC observed, and the type `usr_t` is generic — that is why `--allow-degraded` is required
+the AVC observed, and the type `usr_t` is generic. That is why `--allow-degraded` is required
 in this fixture at all. The fixture demonstrates the contract that when no macro matched, a
 module can reach for its own private types, or a base-type direct allow with the operator's
 explicit consent.
@@ -288,10 +289,10 @@ explicit consent.
 :::: why a named interface is the line between reviewable and opaque
 
 An interface names intent. The call site reads `list_dirs_pattern(myapp_t, var_log_t)` and
-understands what the process will do — list, search, read, open, getattrs — without reading the
-macro body. The caller owns no types; the publisher owns them, and the publisher's `gen_require`
-block is what the reviewer reads to confirm the call. A direct allow inside your module names
-types — your own types — and the rule is legible as written.
+understands what the process will do (list, search, read, open, getattrs) without reading the
+macro body. The caller owns no types. The publisher owns them, and the publisher's
+`gen_require` block is what the reviewer reads to check the call. A direct allow inside your
+module names types, your own types, and the rule is legible as written.
 
 ::::
 
@@ -329,6 +330,6 @@ by mocking the interface lookup, and that is the run CI uses.
 
 You can read an allow rule as a tuple, tell the difference between an interface call and a direct
 allow, and reach for `sesearch` when a reviewer asks what refpolicy already does for that access.
-The next chapter — file contexts and the label lifecycle — is where each allow rule becomes
+The next chapter (file contexts and the label lifecycle) is where each allow rule becomes
 reachable on disk: a rule names `shopapi_var_lib_t`, the `.fc` names `/var/lib/shopapi`,
 `restorecon` writes the label, and the AVC disappears.
