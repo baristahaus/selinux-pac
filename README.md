@@ -15,6 +15,7 @@ The **customer talk** is **202** — three applications (vendor Tomcat already e
 | **Trying this on a Mac** | [Try it on a Mac](#try-it-on-a-mac) |
 | **Application developer** | [Developers](#developers) and **[206](docs/developers/206-ONBOARDING.md)** |
 | **Offline check (any laptop)** | `make check` (**205**) |
+| **Checking who wrote what** | [AUTHORS.md](AUTHORS.md) |
 
 ---
 
@@ -235,6 +236,12 @@ docs/admin/       203 two-host, 301–304 ship/run
 docs/developers/  204 generator, 205 tests, 206 onboarding
 docs/policy/      207 best practices
 ```
+
+---
+
+## Who wrote what
+
+`@anurag-saran` started the project and writes the running parts: the generator, the policy source, Ansible, packaging, and CI. `@baristahaus` wrote the book and the tooling that builds it. Both sides used an AI coding agent. [AUTHORS.md](AUTHORS.md) names the split, the commit counts, and the places where the GitHub Contributors graph counts differently from `git shortlog`.
 
 ---
 
