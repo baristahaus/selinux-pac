@@ -17,7 +17,7 @@ The readiness check is a tuple of four values, and the gate at `scripts/check_so
 | **Ownership** | Who watches a denial that slips past soak and shows up in production | The on-call admin with `emergency_rollback.yml` signed off, the app team with the deploy report JSON |
 | **Reversibility** | How fast the domain can return to permissive after enforce | `emergency_rollback.yml` sets permissive first. `dnf downgrade` follows if `rollback_dnf_version` is set |
 
-The soak gate in [Shipping a policy with sepac](../../docs/shipping.md) makes all three measurable pieces a single JSON payload from `collect_soak_facts.sh`. A deploy report file at `/var/lib/myapp/selinux_deploy_report.json` carries the same four values as `status`, `endpoints_exercised`, `domain_context_verified`, and the context map. The canary, enforce, and rollback playbooks write that file. The operator reads it before every enforce, not the other way around.
+The soak gate in [Shipping a policy with sepac](../../docs/shipping.md) makes all three measurable pieces a single JSON payload from `collect_soak_facts.sh`. A deploy report file at `/var/lib/selinux-policy-ops/myapp/selinux_deploy_report.json` carries the same four values as `status`, `endpoints_exercised`, `domain_context_verified`, and the context map. The canary, enforce, and rollback playbooks write that file. The operator reads it before every enforce, not the other way around.
 
 ## The phases, each one's claim and each one's limit
 
@@ -128,8 +128,8 @@ The invocation below is the host-side CLI for the same checks that the enforce r
 cd /home/<user>/selinux-pac
 
 bash scripts/check_soak_ready.sh \
-  --domain myapp_t \
-  --marker-file /var/lib/myapp/selinux_canary_deployed_at
+  --app-name myapp \
+  --marker-file /var/lib/selinux-policy-ops/myapp/selinux_canary_deployed_at
 ```
 
 The expected output, each line:
@@ -161,5 +161,5 @@ Each line is the reading the gate makes of a tuple that the operator must unders
 :::
 ## What you can do now
 
-- Run `bash scripts/check_soak_ready.sh --auto-tier --base-policy selinux/myapp/myapp.te --candidate-policy policy_out/myapp.te --marker-file /var/lib/myapp/selinux_canary_deployed_at --min-days 7` against the candidate delta and read the `Blast-radius tier:` and `Classifier reason:` lines as the delta's own judgment.
+- Run `bash scripts/check_soak_ready.sh --app-name myapp --auto-tier --base-policy selinux/myapp/myapp.te --candidate-policy policy_out/myapp.te --marker-file /var/lib/selinux-policy-ops/myapp/selinux_canary_deployed_at --min-days 7` against the candidate delta and read the `Blast-radius tier:` and `Classifier reason:` lines as the delta's own judgment.
 - Rehearse the rollback. `emergency_rollback.yml` is not a safety net. It is the second half of the same plan.

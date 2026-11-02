@@ -88,7 +88,7 @@ The book's hard rule is the two-layer model: the host stays Enforcing, only the 
 | **Whole-system mode** | `getenforce` | **Enforcing**: SSH, cron, systemd, and every other domain stay fully protected |
 | **Per-domain log-only list** | `sudo semanage permissive -l` | **`shopapi_t`** (or whatever domain is on the list): denials log only, and the app keeps working |
 
-The enforce and rollback paths read both layers. `enforce.yml` fails when `soak_min_days` is below the production threshold. That is `line 16–17` of the file: the lab value `soak_min_days: 0` on `rhel-qa` is refused on a host in group `production`. `rollback.yml` switches the domain back to permissive first, with the stock `semanage`/Ansible module. It does this before any RPM or module change, so the host never flips state. The soak jobs (`soak_monitor.yml`, `soak_status.yml`) read neither layer: they count events, and a mode they do not check cannot fail their gate.
+The enforce and rollback paths read both layers. `enforce.yml` fails when `soak_min_days` is below the production threshold. That is the `Refuse lab soak window on production group` task: the lab value `soak_min_days: 0` on `rhel-qa` is refused on a host in group `production`. `rollback.yml` switches the domain back to permissive first, with the stock `semanage`/Ansible module. It does this before any RPM or module change, so the host never flips state. The soak jobs (`soak_monitor.yml`, `soak_status.yml`) read neither layer: they count events, and a mode they do not check cannot fail their gate.
 
 ## The cost of flipping back
 
@@ -113,9 +113,9 @@ Soak is a *single domain* observed permissive, while the pipeline watches the po
 
 ```bash title="The soak gate, as check_soak_ready.sh prints it"
 $ sudo bash scripts/check_soak_ready.sh \
-    --domain shopapi_t \
-    --marker-file /var/lib/shopapi/selinux_canary_deployed_at \
-    --report-file /var/lib/shopapi/selinux_deploy_report.json \
+    --app-name shopapi \
+    --marker-file /var/lib/selinux-policy-ops/shopapi/selinux_canary_deployed_at \
+    --report-file /var/lib/selinux-policy-ops/shopapi/selinux_deploy_report.json \
     --manifest config/shopapi.manifest.yml
 
 [INFO] Soak: 8 day(s) elapsed (minimum 7)
@@ -124,7 +124,7 @@ $ sudo bash scripts/check_soak_ready.sh \
 [INFO] Soak gate passed — safe to enforce shopapi_t
 ```
 :::: warn `soak_min_days: 0` is lab-only
-The lab inventory (`ansible/inventory.dev.yml`) sets `soak_min_days: 0` so the pipeline can demonstrate the whole loop without waiting. Production inventories refuse that value: `enforce.yml` line 16–17 fails when `soak_min_days < 7` on a host in group `production`. Do not copy that value onto prod without documented break-glass approval and on-call awareness.
+The lab inventory (`ansible/inventory.dev.yml`) sets `soak_min_days: 0` so the pipeline can demonstrate the whole loop without waiting. Production inventories refuse that value: the `Refuse lab soak window on production group` task in `enforce.yml` fails when `soak_min_days < 7` on a host in group `production`. Do not copy that value onto prod without documented break-glass approval and on-call awareness.
 ::::
 
 

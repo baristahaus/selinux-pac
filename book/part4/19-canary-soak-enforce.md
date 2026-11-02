@@ -37,13 +37,13 @@ The role's `canary.yml` does these things in order, and every one of them is a t
 2. **Register port labels** from the committed manifest. The role reads the host's port table with `semanage port -l`, then asks `scripts/lib/app_manifest.py check-port` what to do for each entry. It runs `semanage port -a` only when the port is free and no other type owns it. It never runs `semanage port -m`. Ports come from git, not from someone typing `semanage port` on the host.
 3. **Make one domain permissive** with `community.general.selinux_permissive` (which runs `semanage permissive -a <domain>`), for the application's own domain only. The host stays enforcing. The application logs instead of blocking.
 4. **Label and verify paths**. Make sure that the application directories exist, run `restorecon` on them, then check the contexts before any service restarts.
-5. **Record the clock**. Write the canary timestamp to the soak marker (`soak_marker_file`, by default `<var_dir>/selinux_canary_deployed_at`). This runs before the restart on purpose. The marker is the left edge of the AVC window that step 7 reads, so the denials of the restart itself are inside it.
+5. **Record the clock**. Write the canary timestamp to the soak marker (`soak_marker_file`, by default `/var/lib/selinux-policy-ops/<app>/selinux_canary_deployed_at`). This runs before the restart on purpose. The marker is the left edge of the AVC window that step 7 reads, so the denials of the restart itself are inside it.
 6. **Restart and probe**. Reset the systemd failure counters, restart the application services, run `restorecon` on the runtime directory, then run the unified endpoint smoke:
    `wait_for_endpoints.sh` against the manifest's endpoints. It probes `http_probe_host` inside the
    retry window baked into the task (`--retries 15 --delay 2`). Lengthening that window today
    means editing `ansible/roles/selinux_pac/tasks/canary.yml`, not the inventory.
 7. **Read the fresh window**. `monitor_avc.sh --marker-file <that marker>` prints the raw count and the net-new count for everything since the clock started. The thresholds are `canary_max_avc` and `canary_max_net_new`. If a count passes either threshold, the block drops into its `rescue`: `semodule -B`, then a failed run.
-8. **Write the report**. `post_deploy_report.sh --phase canary` writes the deploy report at `<var_dir>/selinux_deploy_report.json`. The soak gate later reads that artifact.
+8. **Write the report**. `post_deploy_report.sh --phase canary` writes the deploy report at the manifest's `deploy.deploy_report_file`, by default `/var/lib/selinux-policy-ops/<app>/selinux_deploy_report.json`. The soak gate later reads that artifact.
 
 The marker is the anchor for everything that follows: `ausearch` windows, `days_elapsed`, and the
 "what changed since canary" question at 02:00.
@@ -65,7 +65,7 @@ That is not the same question as "were there AVC lines". Duplicate denials from 
   --max-avc {{ soak_max_avc | default(0) }} \
   --max-net-new {{ soak_max_net_new | default(0) }} \
   --show-lines {{ soak_show_lines | default(5) }} \
-  --fail-dir {{ var_dir }} \
+  --fail-dir {{ soak_marker_file | dirname }} \
   --format json
 ```
 

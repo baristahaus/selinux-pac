@@ -10,7 +10,7 @@ per-permission entries, and subtracts anything already covered by the existing `
 for every denial, in this order:
 
 1. Does an existing baseline macro cover it? → `baseline`.
-2. Is the target a forbidden type (`shadow_t`, `unconfined_t`, `sysadm_t`, `security_t`, `passwd_file_t`)? → `forbidden`.
+2. Is the target a forbidden type (`shadow_t`, `unconfined_t`, `sysadm_t`, `security_t`, `selinux_config_t`, `passwd_file_t`)? → `forbidden`.
 3. Is the target a generic file type on a path the module owns? → `fc_drift` when the `.fc` already covers the path, `fc_fix` when it does not.
 4. Is the target a generic port type bound with `name_bind`? → `private_port`.
 5. Is it a `node_bind` on `node_t`? → `interface` (`corenet_*_bind_generic_node`).
@@ -386,7 +386,7 @@ The generator emits `allow myapp_t self:process execmem;` into `findings.json` a
 | `forbidden` | `03-shadow-read` | target type held too wide, and no allow line, rework the access | yes (`exit_code: 1`) |
 | `needs_review` | `12-execmem-review` | domain-weakening permission, and opt-in with `--allow-needs-review` | yes (`exit_code: 1`) |
 
-The three non-zero exit verdicts, `forbidden`, `toolchain_required`, and `needs_review`, are exactly what `generation_blockers` (lines 323–332 of `cli/deterministic_gen.py`) collects. Each one is persisted to `findings.json` with `generation_blocked: true`, a `pr_summary.md` is written, and CI treats the non-zero status as a failure. The `forbidden` finding refuses to emit the allow. The `toolchain_required` finding refuses to emit a raw allow without interface coverage. The `needs_review` finding refuses to ship a domain-weakening allow without a deliberate opt-in.
+The three non-zero exit verdicts, `forbidden`, `toolchain_required`, and `needs_review`, are exactly what `generation_blockers` in `cli/deterministic_gen.py` collects. Each one is persisted to `findings.json` with `generation_blocked: true`, a `pr_summary.md` is written, and CI treats the non-zero status as a failure. The `forbidden` finding refuses to emit the allow. The `toolchain_required` finding refuses to emit a raw allow without interface coverage. The `needs_review` finding refuses to ship a domain-weakening allow without a deliberate opt-in.
 
 ## Why exit codes matter
 

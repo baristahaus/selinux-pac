@@ -31,7 +31,7 @@ The panic from the app team in this shape is the wrong one: it is the expectatio
 | Symptom | First check | Decision | Who decides | What must never be done |
 |---|---|---|---|---|
 | Service responding, AVC in audit.log, domain permissive | `getenforce` → Enforcing. `semanage permissive -l` → domain still listed. `ausearch -m avc -ts recent` → denials but no outage | Soak still running. Denial is a finding, not an outage. | SELinux admin, with the change-ticket owner's sign-off on the PR | `setenforce 0` on the host, which makes the whole OS permissive |
-| `soak_monitor.yml` ran daily, flagged net-new count | `soak_status.yml` or the AAP **SELinux – Soak monitor** job status, and the deploy report at `/var/lib/myapp/selinux_deploy_report.json` | Net-new count over threshold, with `soak_use_net_new` still on. The gate is informational, not blocking | Same as the first row | `audit2allow | semodule -i` on production |
+| `soak_monitor.yml` ran daily, flagged net-new count | `soak_status.yml` or the AAP **SELinux – Soak monitor** job status, and the deploy report at `/var/lib/selinux-policy-ops/myapp/selinux_deploy_report.json` | Net-new count over threshold, with `soak_use_net_new` still on. The gate is informational, not blocking | Same as the first row | `audit2allow | semodule -i` on production |
 | Application still accepting traffic | `semanage permissive -l` still contains the domain. AVCs are present, but the path is reachable | PR path: generate from the AVCs, CODEOWNER review, signed RPM, re-canary | The SELinux admin owns the PR. The change-ticket owner approves the PR | Editing `/etc/selinux/config`, which is a persistent OS state change |
 
 ### The read-only reconnaissance set
@@ -49,7 +49,7 @@ semanage permissive -l
 ausearch -m avc -ts recent 2>/dev/null || grep -E '^(type=AVC|type=SELINUX_ERR)' /var/log/audit/audit.log
 
 # 4. Soak status — marker file and AAP record.
-ls /var/lib/myapp/selinux_canary_deployed_at   # exists → soak running; the clock is counting
+ls /var/lib/selinux-policy-ops/myapp/selinux_canary_deployed_at   # exists → soak running; the clock is counting
 ansible-playbook -i ansible/inventory.production.yml ansible/soak_status.yml --limit canary  # playbook-level state
 ```
 
@@ -96,15 +96,16 @@ The guard rails in [`repo:ansible/roles/selinux_pac/tasks/enforce.yml`](../../an
 
 | Guard rail | What it enforces |
 |---|---|
-| **Change ticket required** (line 2) | Even `force_enforce=true` needs a `change_ticket`. The role refuses without one. |
-| **Lab soak window refused on production** (line 9–16) | `soak_min_days` below 7 on a host in `group: production` is rejected. It is a lab-only value. |
-| **Soak gate skipped when `force_enforce=true`** (lines 19–34) | The role does not run `collect_soak_facts.sh`, does not collect `soak_facts`, and does not pass the gate. |
-| **Canary marker missing** (lines 36–41) | Still blocked without the marker. `deploy_canary` must run before `force_enforce`. |
-| **Soak period not met** (lines 43–50) | Days elapsed below `soak_min_days`. The role skips this only if `force_enforce` is set. |
-| **Net-new count too high** (lines 52–61) | Skipped only if `force_enforce` is set and `soak_use_net_new` is true. |
-| **Raw AVC count too high** (lines 63–71) | Same: skipped when `force_enforce=true`. |
-| **Deploy report gate** (lines 73–79) | Skipped when `force_enforce=true`. |
-| **Break-glass message** (lines 80–83) | `force_enforce=true`: skipping soak gate (document approval in change ticket). |
+| **Change ticket required** (lines 2-7) | Even `force_enforce=true` needs a `change_ticket`. The role refuses without one. |
+| **Break-glass reason required** (lines 9-17) | `force_enforce=true` also needs `break_glass_reason`, so the skip records why it happened. |
+| **Lab soak window refused on production** (lines 19-27) | `soak_min_days` below 7 on a host in `group: production` is rejected. It is a lab-only value. |
+| **Soak gate skipped when `force_enforce=true`** (lines 29-49) | The role does not run `collect_soak_facts.sh`, does not collect `soak_facts`, and does not pass the gate. |
+| **Canary marker missing** (lines 52-57) | Still blocked without the marker. `deploy_canary` must run before `force_enforce`. |
+| **Soak period not met** (lines 59-67) | Days elapsed below `soak_min_days`. The role skips this only if `force_enforce` is set. |
+| **Net-new count too high** (lines 88-97) | Skipped only if `force_enforce` is set and `soak_use_net_new` is true. |
+| **Raw AVC count too high** (lines 99-107) | Same: skipped when `force_enforce=true`. |
+| **Deploy report gate** (lines 109-114) | Skipped when `force_enforce=true`. |
+| **Break-glass message** (lines 116-119) | `force_enforce=true`: skipping soak gate (document approval in change ticket). |
 
 After the gate is skipped, the role does four things. It re-enables the dontaudit baseline with `semodule -B`. It removes the permissive flag with `community.general.selinux_permissive` (`permissive: false`). It checks and restarts the services. Then it writes the enforce deploy report. The `rescue:` block puts the domain back to permissive if any of those steps fails. So the operator keeps a safety net even when the gate is gone.
 
@@ -144,8 +145,8 @@ The incident's real deliverable is a reviewed commit, not a host edit. Capture t
 | Evidence | Where | How |
 |---|---|---|
 | **Filtered AVCs** | `/tmp/emergency_avc.log`. `emergency_rollback.yml` step 8 writes it, or the operator writes it on the host. | `ausearch -m AVC,USER_AVC,SELINUX_ERR,USER_SELINUX_ERR -ts recent --format raw` filtered to `{{ domain }}` and persistent paths. `generate_emergency_patch.yml` requires this log to be present. |
-| **What was changed and when** | `/var/lib/myapp/selinux_deploy_report.json`: deploy or rollback phase, marker timestamp, policy version | `post_deploy_report.sh` with `phase=rollback` (or `phase=enforce`) writes this. |
-| **The PR** | `policy_out/` directory. Only the controller writes it. | `generate_emergency_patch.yml` runs `deterministic_gen.py` against the AVC log and the manifest, and writes `findings.json`, `avc_summary.txt`, `pr_summary.md`, and the `.te`/`.fc` patch. The result never goes on prod. |
+| **What was changed and when** | `/var/lib/selinux-policy-ops/myapp/selinux_deploy_report.json`: deploy or rollback phase, marker timestamp, policy version | `post_deploy_report.sh` with `phase=rollback` (or `phase=enforce`) writes this. |
+| **The PR** | `policy_out/` directory. Only the controller writes it. | `generate_emergency_patch.yml` runs `deterministic_gen.py` against the AVC log and the manifest, and writes `findings.json`, `pr_summary.md`, and the `.te`/`.fc` patch. It then runs `validate_forbidden_patterns.sh` on the result. The result never goes on prod. |
 
 The controller is the only machine that ships the policy. The role's comments spell this out:
 
@@ -182,7 +183,7 @@ The question from the app team is "why was it enforcing with no warning?" The an
 ::: try Rehearse the incident
 Laptop: walk the decision table above against the `01-mislabeled-var-lib` fixture (`tests/fixtures/deterministic/01-mislabeled-var-lib/avc.log`). It pins shape A: a denial while the domain is permissive, the path reachable, and the answer a pull request.
 
-Two-host lab (controller only): reset the VMs with `bash lab/reset_demo_vms.sh`. Work through Part 1 of `docs/guides/302-TECHNICAL.md`, and deploy the canary. Then break `/feature-spool`, trigger `ansible/emergency_rollback.yml`, and check that the deploy report reads `phase: rollback`. Everything before that last command is read-only: `getenforce`, `semanage permissive -l`, `ausearch -m avc -ts recent`, `ls /var/lib/myapp/selinux_canary_deployed_at`.
+Two-host lab (controller only): reset the VMs with `bash lab/reset_demo_vms.sh`. Work through Part 1 of `docs/guides/302-TECHNICAL.md`, and deploy the canary. Then break `/feature-spool`, trigger `ansible/emergency_rollback.yml`, and check that the deploy report reads `phase: rollback`. Everything before that last command is read-only: `getenforce`, `semanage permissive -l`, `ausearch -m avc -ts recent`, `ls /var/lib/selinux-policy-ops/myapp/selinux_canary_deployed_at`.
 :::
 
 ## What you can do now
