@@ -213,11 +213,7 @@ $ sudo systemctl start myapp.service
 $ sudo restorecon -Rv /run/myapp
 ```
 
-The canary phase ([`scripts/dev_generate_policy.sh`](../../scripts/dev_generate_policy.sh))
-generates the `.te` / `.fc`, promotes them into [`selinux/`](../../selinux/) via
-`cp`, then the Ansible role (`ansible/roles/selinux_pac/`) runs
-`semodule -i` followed by `restorecon`. Every new file is born with the
-right label, and the old ones inherit the policy on the same run.
+The developer step ([`scripts/dev_generate_policy.sh`](../../scripts/dev_generate_policy.sh)) generates the `.te` / `.fc` and promotes them into [`selinux/`](../../selinux/) with `--apply`. The canary is a later step: [`ansible/deploy_canary.yml`](../../ansible/deploy_canary.yml) runs the role in `ansible/roles/selinux_pac/`, which installs the RPM or the staged `.pp` and restores contexts before it restarts the service. Every new file is born with the right label, and the old ones inherit the policy on the same run.
 
 ## Worked examples — the golden fixtures
 

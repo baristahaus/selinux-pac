@@ -4,7 +4,7 @@
 > `make test-fixtures` fails. Every row on this page is a real directory under
 > `tests/fixtures/deterministic/`, read from the `expected.json` each case ships.
 
-## The 13 deterministic cases
+## The 16 deterministic cases
 
 Each row is the fixture directory, the verdict as written in `expected.json`, the tuple the
 AVC asked about, the answer the generator produces, and the chapter that teaches the
@@ -25,6 +25,9 @@ decision the verdict rewards.
 | `11-private-getopt` | `direct` | `getopt` on `myapp_port_t`, target type private to this module | raw allow: the type is application-private | [Designing a Domain](repo:book/part2/11-designing-a-domain.md) |
 | `12-execmem-review` | `needs_review` | `execmem` on self, domain to domain, `process` class | security decision. Exit 1 without `--allow-needs-review` | [`needs_review`: execmem](repo:book/part2/12-when-policy-says-no.md) |
 | `13-cgroup-omit` | `baseline` | `getattr` on `cgroup_t`, target type `cgroup_t` | omitted: the type is often undeclared, so no allow is required | [When Policy Says No](repo:book/part2/12-when-policy-says-no.md) |
+| `14-stale-entrypoint` | `fc_drift` | `entrypoint` on `/opt/myapp/app.py`, targets `bin_t`, `java_exec_t`, `usr_t` | `restorecon`: the path carries a stale generic label | [File Contexts and the Label Lifecycle](repo:book/part2/09-file-contexts-and-the-label-lifecycle.md) |
+| `15-system-jvm-exec-bin` | `needs_review` | `execute` and `read open` on the system JVM, target `bin_t` | review the system JVM exception. Add `selinux_exceptions.exec_bin` with a reason | [When Policy Says No](repo:book/part2/12-when-policy-says-no.md) |
+| `16-system-jvm-reviewed` | `interface` | the same AVC as 15, with the reviewed exception in the manifest | `corecmd_exec_bin(myapp_t)` | [Allow Rules and Interfaces](repo:book/part2/08-allow-rules-and-interfaces.md) |
 
 :::: why Each verdict is the answer to a different question
 `fc_drift` means *the path is already covered*. `baseline` means *the tuple already allows*.

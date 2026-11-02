@@ -45,7 +45,7 @@ Each call names the policy directory and the app. The job then runs `python3 cli
 
 The script has twelve refusals in total. Seven are regex checks against the `.te`. Five of them check the shape of an `allow` line: wildcard target, wildcard class, fully wildcard, `self:*`, and `bin_t:file … execute`. One checks a broad `var_t:file` write. One checks `^module\s+`, the old module declaration that a refpolicy `.te` must not use.
 
-An eighth check loops over the three high-privilege target types. The remaining four are structural. One is a Python check for custom types declared inside the `require` block. One checks that `policy_module()` is present. One checks that the file mentions its own domain. The last one checks the `.fc` content.
+An eighth check loops over the six high-privilege target types. The remaining four are structural. One is a Python check for custom types declared inside the `require` block. One checks that `policy_module()` is present. One checks that the file mentions its own domain. The last one checks the `.fc` content.
 
 | # | Pattern (text) | What it refuses |
 |---|---|---|
@@ -56,7 +56,7 @@ An eighth check loops over the three high-privilege target types. The remaining 
 | 5 | `allow\s+\w+\s+bin_t:file\s+\{[^}]*execute` | `bin_t:file execute` on an app binary. The `.fc` file must ship a dedicated `*_exec_t` instead |
 | 6 | `^module\s+` | Bare `module … {` declaration instead of `policy_module(myapp, …)` |
 | 7 | Python regex inside `require { … }` that names `myapp_` custom types | Custom types declared inside the require block. They belong only in a `.if` or in `.fc` |
-| 8 | `shadow_t`, `unconfined_t`, `sysadm_t` on the target side of any allow | Targeting a high-privilege type from the new module |
+| 8 | `shadow_t`, `unconfined_t`, `sysadm_t`, `security_t`, `selinux_config_t`, `passwd_file_t` on the target side of any allow | Targeting a high-privilege type from the new module |
 | 9 | `var_t:file` with `write` on the target side | Broad `var_t:file` write, which covers every system file |
 | 10 | Missing `policy_module` in the file | No module declaration at all |
 | 11 | Missing `${SELINUX_DOMAIN}` in the file | The file never mentions the domain |

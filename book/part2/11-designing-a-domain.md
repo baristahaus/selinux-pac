@@ -52,11 +52,11 @@ The review cost is the same narrow one: you sign off the file context declaratio
 
 ## Why the exec type matters
 
-Both (a) and (b) exist for one reason: `bin_t:file execute` is forbidden by this repository's gate. The CI check reads:
+Both (a) and (b) exist for one reason: a raw `execute` allow on `bin_t` or `java_exec_t` is forbidden by this repository's gate. The gate also refuses the macros that compile to the same allow, unless the manifest records the reviewed `exec_bin` exception. The check reads:
 
 ```bash
-if grep -qE 'allow\s+\w+\s+bin_t:file[[:space:]]+\{[^}]*execute' "${te}"; then
-    check_fail "Forbidden bin_t:file execute — label app binaries with dedicated exec types in .fc"
+if grep -qE 'allow[[:space:]]+[^[:space:]]+[[:space:]]+(bin_t|java_exec_t):file[[:space:]]+(\{[^}]*\bexecute|execute)' <<<"${te_rules}"; then
+    check_fail "Forbidden raw allow of execute on bin_t — label app binaries with dedicated exec types in .fc; the system JVM needs the reviewed corecmd_exec_bin exception"
 fi
 ```
 
