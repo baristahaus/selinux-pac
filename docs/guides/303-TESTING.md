@@ -155,6 +155,8 @@ Policy compile needs `selinux-policy-devel` (`/usr/share/selinux/devel/Makefile`
 
 ## 4. CI on pull requests
 
+For a **shareable deep dive** on the four PR jobs, the 106 smoke tests, 15 compiled bypass fixtures, and 10 generator verdicts, see **[304 — CI and test gates](304-CI-AND-TEST-GATES.md)**.
+
 Workflow: [`.github/workflows/selinux-policy-ci.yml`](../../.github/workflows/selinux-policy-ci.yml)
 
 The generator already ran the same forbidden-pattern check, so these jobs are expected to **pass**. They are the admin review gate, not a fail-on-purpose demo step.

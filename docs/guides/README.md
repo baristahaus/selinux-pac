@@ -26,4 +26,5 @@ The main docs are [sepac.md](../sepac.md), [shipping.md](../shipping.md) and [de
 |-------|----------------|
 | [201 — Engine reference](201-TOOL-COMMANDS.md) | Each script and playbook sepac runs: inputs, outputs, what a pull request must not contain |
 | [303 — Testing](303-TESTING.md) | `make test`, the fixtures in `tests/fixtures/`, CI, and the production gates |
+| [304 — CI and test gates](304-CI-AND-TEST-GATES.md) | Shareable detail on the **4 CI jobs**, **106 smoke tests**, **15 bypass attempts**, and **10 generator verdicts** |
 | [pr_body.example.md](pr_body.example.md), [pr_summary.example.md](pr_summary.example.md) | What a generated pull-request description looks like |
