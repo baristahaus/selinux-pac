@@ -128,7 +128,7 @@ Add `--format json` when a pipeline consumes the result. Add `--show-lines 0` wh
 On a laptop without SELinux, the same reading works against the fixture:
 
 ```bash
-$ cat docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log
+$ cat tests/fixtures/deterministic/01-mislabeled-var-lib/avc.log
 ```
 
 The fixture log is the deterministic replay: no host required, no `ausearch`, no kernel policy. It is the form readers pull for Chapter 13 when they want to follow the generator end-to-end without touching a box.
@@ -145,7 +145,7 @@ If the box is quiet, you will see nothing. A host denies nothing that is not alr
 
 ```bash
 # On any laptop — use the fixture
-$ cat docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log
+$ cat tests/fixtures/deterministic/01-mislabeled-var-lib/avc.log
 ```
 
 Read the six fields: `denied { permissions }`, `pid`/`comm`, `path` (or `src`), `scontext`, `tcontext`, `tclass`, `permissive`. The third field of each context is the type. The type is the only thing that gates an allow rule. The same six fields appear on every line, in every host, in every fixture.

@@ -9,19 +9,29 @@ policy_module(shopapi, 1.0.0)
 # service runs permissive. If process execmem never appears in that log, do
 # not add it (needs_review if it does).
 #
-# Live start: systemd SELinuxContext=system_u:system_r:shopapi_t:s0
-# (java is a shared bin_t/java_exec_t binary). Alternative: labelled wrapper
-# at the app install_root labeled shopapi_exec_t + type_transition.
+# Live start: ExecStart is /opt/shopapi/bin/shopapi (shopapi_exec_t).
+# init_daemon_domain transitions init_t, which is an initrc_domain
+# (init.te calls init_initrc_domain(init_t)), when that file is executed.
+# https://github.com/fedora-selinux/selinux-policy/blob/c9s/policy/modules/system/init.if
+# The wrapper execs /usr/bin/java. On RHEL 9 the JVM file is bin_t:
+# java_exec_t is an alias of bin_t in the base corecommands module. The
+# generator writes corecmd_exec_bin(shopapi_t) only because
+# config/shopapi.manifest.yml records the reviewed selinux_exceptions.exec_bin.
+# Do not hand-write it, and never a raw allow on bin_t. It is not an entrypoint.
+# The unit has no SELinuxContext= line. The java process type is shopapi_t.
+# The host commands are in docs/guides/LIVE_CHECKS.md.
 #############################################
 
 type shopapi_t;
 type shopapi_exec_t;
+type shopapi_lib_t;
 type shopapi_var_lib_t;
 type shopapi_var_run_t;
 type shopapi_log_t;
 type shopapi_port_t;
 
 files_type(shopapi_exec_t)
+files_type(shopapi_lib_t)
 files_type(shopapi_var_lib_t)
 files_pid_file(shopapi_var_run_t)
 logging_log_file(shopapi_log_t)

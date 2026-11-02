@@ -1,0 +1,54 @@
+# myapp with the reviewed bin_t exception. Same AVCs as 15; the manifest is the only difference.
+# Offline generator fixture. Live demo is config/shopapi.manifest.yml.
+app_name: myapp
+domain: myapp_t
+
+paths:
+  install_root: /opt/myapp
+  var_dir: /var/lib/myapp
+  log_dir: /var/log/myapp
+  runtime_dir: /run/myapp
+  var_opt_dir: /var/opt/myapp
+
+services:
+  primary:
+    unit: myapp.service
+    domain: myapp_t
+  backend:
+    unit: myapp-backend.service
+    domain: myapp_backend_t
+
+http:
+  host: 127.0.0.1
+  port: 8888
+  endpoints:
+    - /
+    - /save-log
+    - /run-script
+    - /rotate-log
+    - /probe-backend
+    - /notify-socket
+  backend:
+    port: 8889
+    health_path: /health
+
+selinux_ports:
+  - port: 8888
+    proto: tcp
+    type: myapp_port_t
+  - port: 8889
+    proto: tcp
+    type: myapp_backend_port_t
+
+policy:
+  module_dir: selinux
+  service_name: myapp.service
+
+deploy:
+  soak_marker_file: /var/lib/selinux-policy-ops/myapp/selinux_canary_deployed_at
+  deploy_report_file: /var/lib/selinux-policy-ops/myapp/selinux_deploy_report.json
+
+selinux_exceptions:
+  exec_bin: >-
+    Fixture: the system JVM is bin_t on RHEL 9 because java_exec_t is an
+    alias of bin_t. Reviewed the same way as the shopapi manifest.

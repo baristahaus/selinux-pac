@@ -6,6 +6,16 @@
       -e change_ticket=CHG123). force_enforce=true still needs a ticket.
   when: (change_ticket | default('') | trim | length) == 0
 
+- name: Require a reason for break-glass enforce
+  ansible.builtin.fail:
+    msg: >-
+      force_enforce=true skips the marker, the AVC gate, net-new, the report,
+      the day count, and the daily history. Pass
+      -e break_glass_reason='why this cannot wait for the soak'.
+  when:
+    - force_enforce | default(false) | bool
+    - (break_glass_reason | default('') | trim | length) == 0
+
 - name: Refuse lab soak window on production group
   ansible.builtin.fail:
     msg: >-
@@ -16,13 +26,19 @@
     - "'production' in group_names"
     - (soak_min_days | default(7) | int) < 7
 
+- name: Fail closed unless auditd is recording since the marker
+  ansible.builtin.command: >
+    {{ selinux_ops_dir }}/check_audit_health.sh {{ soak_marker_file }}
+  changed_when: false
+  when: not (force_enforce | default(false) | bool)
+
 - name: Collect soak gate facts on target
   ansible.builtin.command: >
     {{ selinux_ops_dir }}/collect_soak_facts.sh
     --domain {{ domain }}
     --manifest {{ app_manifest_path }}
     --marker-file {{ soak_marker_file }}
-    --report-file {{ pac_manifest.deploy.deploy_report_file | default(var_dir ~ '/selinux_deploy_report.json') }}
+    --report-file {{ pac_manifest.deploy.deploy_report_file | default('/var/lib/selinux-policy-ops/' ~ app_name ~ '/selinux_deploy_report.json') }}
     --var-dir {{ var_dir }}
   register: soak_facts_raw
   changed_when: false
@@ -47,7 +63,27 @@
       need {{ soak_min_days | default(7) }}.
   when:
     - not (force_enforce | default(false) | bool)
+    - not (skip_soak_days | default(false) | bool)
     - soak_facts.days_elapsed | int < (soak_min_days | default(7) | int)
+
+- name: Fail when soak AVC monitor failed closed
+  ansible.builtin.command: >
+    {{ selinux_ops_dir }}/check_soak_gate.sh
+    --fail-closed {{ soak_facts.avc_fail_closed | bool | ternary('true', 'false') }}
+    --net-new {{ soak_facts.avc_net_new_count }}
+  changed_when: false
+  when: not (force_enforce | default(false) | bool)
+
+- name: Require consecutive passing daily soak results
+  ansible.builtin.command: >
+    {{ selinux_ops_dir }}/check_soak_days.sh
+    --state-dir {{ soak_marker_file | dirname }}
+    --min-days {{ soak_min_days | default(7) }}
+    --max-net-new {{ soak_max_net_new | default(0) }}
+  changed_when: false
+  when:
+    - not (force_enforce | default(false) | bool)
+    - not (skip_soak_days | default(false) | bool)
 
 - name: Fail when net-new AVC needs too high
   ansible.builtin.fail:
@@ -67,7 +103,7 @@
       (max {{ soak_max_avc | default(0) }}).
   when:
     - not (force_enforce | default(false) | bool)
-    - soak_facts.avc_fail_closed | default(false) | bool or not (soak_use_net_new | default(true) | bool)
+    - not (soak_use_net_new | default(true) | bool)
     - soak_facts.avc_count_since_marker | int > (soak_max_avc | default(0) | int)
 
 - name: Fail when deploy report gate not satisfied
@@ -83,9 +119,10 @@
   when: force_enforce | default(false) | bool
 
 - name: Re-enable dontaudit baseline before enforce
-  ansible.builtin.command: semodule -B
+  ansible.builtin.command: >
+    {{ selinux_ops_dir }}/semodule_restore_dontaudit.sh --app {{ app_name }}
   register: semodule_b_enforce
-  changed_when: semodule_b_enforce.rc == 0
+  changed_when: "'skip semodule -B' not in (semodule_b_enforce.stderr | default(''))"
 
 - name: Detect semanage availability
   ansible.builtin.stat:
@@ -98,13 +135,6 @@
         name: "{{ domain }}"
         permissive: false
       when: semanage_bin.stat.exists
-
-    - name: Remove FCOS permissive overlay before enforce
-      ansible.builtin.command: "semodule -r {{ stub_module_name }}"
-      register: overlay_remove
-      failed_when: overlay_remove.rc not in [0, 1]
-      changed_when: overlay_remove.rc == 0
-      when: not semanage_bin.stat.exists
 
     - name: Verify SELinux enforcing mode
       ansible.builtin.command: getenforce
@@ -166,9 +196,20 @@
         --manifest {{ app_manifest_path }}
         --marker-file {{ soak_marker_file }}
         --policy-version {{ policy_version }}
+        {{ '--force-enforce' if (force_enforce | default(false) | bool) else '' }}
+        {{ '--skip-soak-days' if (skip_soak_days | default(false) | bool) else '' }}
+      environment:
+        BREAK_GLASS_REASON: "{{ break_glass_reason | default('') if (force_enforce | default(false) | bool) else '' }}"
       register: deploy_report
       changed_when: deploy_report.rc == 0
       failed_when: deploy_report.rc != 0
+
+    - name: Archive this app's canary marker after enforce
+      ansible.builtin.command: >
+        {{ selinux_ops_dir }}/semodule_restore_dontaudit.sh
+        --app {{ app_name }} --archive
+      register: archived_marker
+      changed_when: "'archived ' in (archived_marker.stdout | default(''))"
 
   rescue:
     - name: Auto-rescue — restore permissive domain after enforce failure
@@ -195,4 +236,4 @@
       ansible.builtin.fail:
         msg: >-
           Enforce failed; {{ domain }} restored to permissive.
-          Inspect deploy report at {{ var_dir }}/selinux_deploy_report.json.
+          Inspect deploy report at {{ pac_manifest.deploy.deploy_report_file | default('/var/lib/selinux-policy-ops/' ~ app_name ~ '/selinux_deploy_report.json') }}.

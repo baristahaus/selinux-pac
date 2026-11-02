@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from avc_preprocess import AccessNeed, merge_avc_entries, subtract_covered  # noqa: E402
-from selinux_gen import parse_avc_line  # noqa: E402
+from avc_parse import parse_avc_line  # noqa: E402
 
 import yaml  # noqa: E402
 

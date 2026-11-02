@@ -1,0 +1,5 @@
+#!/bin/sh
+# Entrypoint for shopapi_t. The file is shopapi_exec_t. The system java is
+# bin_t on RHEL 9 (java_exec_t is an alias of bin_t). It is executed with
+# corecmd_exec_bin under the reviewed manifest exception, not an entrypoint.
+exec /usr/bin/java "$@"

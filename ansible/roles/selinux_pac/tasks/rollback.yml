@@ -21,9 +21,10 @@
   when: rollback_dnf_version is defined and rollback_dnf_version | length > 0
 
 - name: Restore dontaudit baseline after rollback
-  ansible.builtin.command: semodule -B
+  ansible.builtin.command: >
+    {{ selinux_ops_dir }}/semodule_restore_dontaudit.sh --app {{ app_name }}
   register: semodule_b_rb
-  changed_when: semodule_b_rb.rc == 0
+  changed_when: "'skip semodule -B' not in (semodule_b_rb.stderr | default(''))"
 
 - name: Ensure persistent application directories exist
   ansible.builtin.file:
@@ -88,5 +89,9 @@
   when: selinux_ops_dir is defined
 
 - name: Record rollback timestamp (reset soak clock)
-  ansible.builtin.shell: "date +%s > {{ soak_marker_file }}"
+  ansible.builtin.shell: |
+    install -d -o root -g root -m 0755 "{{ soak_marker_file | dirname }}"
+    date +%s > "{{ soak_marker_file }}"
+    chown root:root "{{ soak_marker_file }}"
+    chmod 0644 "{{ soak_marker_file }}"
   changed_when: true

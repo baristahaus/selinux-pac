@@ -42,9 +42,9 @@
     - selinux_pac_phase not in ['soak_monitor', 'soak_status', 'rollback', 'reset_host']
     - not (pac_pv_artifact.stat.exists | default(false))
 
-- name: Stat selinux/policy_version.txt next to artifact dir (repo checkout)
+- name: Stat selinux/myapp/policy_version.txt next to artifact dir (repo checkout)
   ansible.builtin.stat:
-    path: "{{ policy_artifact_dir }}/../selinux/policy_version.txt"
+    path: "{{ policy_artifact_dir }}/../selinux/myapp/policy_version.txt"
   register: pac_pv_selinux
   run_once: true
   delegate_to: localhost
@@ -58,7 +58,7 @@
   ansible.builtin.fail:
     msg: >-
       No policy_version.txt under {{ policy_artifact_dir }}
-      or module_dir — run dev_generate_policy or stage_skip_ai_fixture
+      or module_dir — run dev_generate_policy or stage_offline_fixture
   when:
     - selinux_pac_phase not in ['soak_monitor', 'soak_status', 'rollback', 'reset_host']
     - not (pac_pv_artifact.stat.exists | default(false))
@@ -77,7 +77,7 @@
           else (
             (policy_artifact_dir ~ '/' ~ pac_manifest.policy.module_dir ~ '/policy_version.txt')
             if (pac_pv_module.stat.exists | default(false))
-            else (policy_artifact_dir ~ '/../selinux/policy_version.txt')
+            else (policy_artifact_dir ~ '/../selinux/myapp/policy_version.txt')
           )
         ) | trim
       }}

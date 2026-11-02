@@ -17,7 +17,7 @@ That is the only syntax in `.te` that creates a type. From that moment, the type
 in allow rules, in file-context lines, and in `sesearch` queries. The type is the thing
 all three tools talk about.
 
-In the example module (`selinux/myapp.te`), every line of type declarations is a purpose
+In the example module (`selinux/myapp/myapp.te`), every line of type declarations is a purpose
 statement. Each type is tied to a path, a port, or a role. Eleven types are declared for
 a single application, and each one is *owned* by its purpose:
 

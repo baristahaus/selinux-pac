@@ -1,0 +1,49 @@
+# Scripts and libraries shipped in the selinux-pac RPM.
+# validate_rpm_sepac_parity.sh checks that every file listed here
+# exists in the source tree and appears in selinux-pac.spec.
+#
+# Format: relative path under the repo root.
+
+# CLI entry point and Python modules
+cli/sepac.py
+cli/avc_parse.py
+cli/avc_preprocess.py
+cli/boolean_hints.py
+cli/deterministic_gen.py
+cli/fc_labeling.py
+cli/policy_audit.py
+cli/policy_rules.py
+cli/pr_summary_common.py
+cli/soak_net_new.py
+cli/tune_report.py
+cli/verify_avc_coverage.py
+
+# Scripts that sepac calls directly
+scripts/selinux_pac_adopt.sh
+scripts/scaffold_sepolicy_module.sh
+scripts/semodule_restore_dontaudit.sh
+scripts/dev_generate_policy.sh
+scripts/validate_app_manifest.sh
+scripts/compile_and_validate.sh
+scripts/validate_policy_semantics.sh
+scripts/validate_forbidden_patterns.sh
+scripts/assemble_pr_body.sh
+scripts/reject_compiled_bypasses.sh
+scripts/classify_policy_blast_radius.sh
+
+# Script libraries (sourced by the scripts above)
+scripts/lib/app_identity.sh
+scripts/lib/app_manifest.py
+scripts/lib/app_root.sh
+scripts/lib/avc_query.sh
+scripts/lib/blast_radius_classify.py
+scripts/lib/blast_radius_collect.sh
+scripts/lib/compile_policy.sh
+scripts/lib/manifest_shell.sh
+scripts/lib/policy_generation.sh
+scripts/lib/policy_isolated_store.sh
+scripts/lib/policy_module_diff.sh
+scripts/lib/policy_module_diff_side.sh
+scripts/lib/policy_module_sesearch.sh
+scripts/lib/vendor_policy_check.sh
+scripts/lib/version.sh

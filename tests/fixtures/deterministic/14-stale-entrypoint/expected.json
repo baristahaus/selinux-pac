@@ -1,0 +1,14 @@
+[
+  {
+    "verdict": "fc_drift",
+    "tgt": "bin_t"
+  },
+  {
+    "verdict": "fc_drift",
+    "tgt": "java_exec_t"
+  },
+  {
+    "verdict": "fc_drift",
+    "tgt": "usr_t"
+  }
+]

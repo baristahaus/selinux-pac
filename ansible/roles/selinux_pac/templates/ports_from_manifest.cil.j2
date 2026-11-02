@@ -1,4 +1,0 @@
-; Generated from app manifest selinux_ports (FCOS / hosts without semanage).
-{% for item in selinux_ports_list %}
-(portcon {{ item.proto | default('tcp') }} {{ item.port }} (system_u object_r {{ item.type }} ((s0) (s0))))
-{% endfor %}

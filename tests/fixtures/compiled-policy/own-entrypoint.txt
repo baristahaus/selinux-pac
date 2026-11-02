@@ -1,0 +1,1 @@
+allow shopapi_t shopapi_exec_t:file { read entrypoint execute };

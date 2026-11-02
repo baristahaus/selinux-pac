@@ -106,19 +106,9 @@
     runtime_dir: "{{ pac_manifest.paths.runtime_dir | default('/run/' ~ pac_manifest.app_name) }}"
     service_name: "{{ pac_manifest.services.primary.unit }}"
     http_probe_host: "{{ pac_manifest.http.host | default(http_probe_host) }}"
-    soak_marker_file: "{{ pac_manifest.deploy.soak_marker_file | default(var_dir ~ '/selinux_canary_deployed_at') }}"
+    soak_marker_file: "{{ pac_manifest.deploy.soak_marker_file | default('/var/lib/selinux-policy-ops/' ~ pac_manifest.app_name ~ '/selinux_canary_deployed_at') }}"
     selinux_ports_list: "{{ pac_manifest.selinux_ports | default([]) }}"
-    selinux_repo_dir: >-
-      {{
-        policy_artifact_dir ~ '/' ~ (pac_manifest.policy.module_dir | default('selinux'))
-        if not (pac_manifest.policy.module_dir | default('selinux')) is match('^/')
-        else pac_manifest.policy.module_dir
-      }}
-    stub_policy_src: "{{ selinux_repo_dir }}/{{ pac_manifest.app_name }}_canary.pp"
-    stub_policy_staging: "/var/lib/selinux-policy-staging/{{ pac_manifest.app_name }}_canary.pp"
-    ports_cil_src: "{{ selinux_repo_dir }}/{{ pac_manifest.app_name }}_ports.cil"
-    ports_cil_staging: "/var/lib/selinux-policy-staging/{{ pac_manifest.app_name }}_ports.cil"
-    stub_module_name: "{{ pac_manifest.app_name }}_canary"
+    selinux_booleans_list: "{{ pac_manifest.selinux_booleans | default([]) }}"
 
 - name: Build selinux_ports_list from http when manifest omits selinux_ports
   ansible.builtin.set_fact:

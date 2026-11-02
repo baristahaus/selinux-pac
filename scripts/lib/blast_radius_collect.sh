@@ -21,7 +21,7 @@ if [[ -z "${BLAST_RADIUS_MODULE:-}" ]]; then
     exit 1
 fi
 if [[ -z "${BLAST_RADIUS_DOMAINS:-}" ]]; then
-    echo "blast_radius_collect: BLAST_RADIUS_DOMAINS is required — set explicitly or via APP_MANIFEST" >&2
+    echo "blast_radius_collect: BLAST_RADIUS_DOMAINS is required — pass --app NAME or set BLAST_RADIUS_DOMAINS" >&2
     exit 1
 fi
 
@@ -60,8 +60,8 @@ collect_side() {
     store_prefix="$(isolated_store_create)"
     kern="$(isolated_store_kern "${store_prefix}")"
 
-    semodule -r "${MODULE}" -s targeted -p "${store_prefix}" 2>/dev/null || true
-    if ! semodule -s targeted -p "${store_prefix}" -i "${pp}"; then
+    semodule -n -r "${MODULE}" -s targeted -p "${store_prefix}" 2>/dev/null || true
+    if ! semodule -n -s targeted -p "${store_prefix}" -i "${pp}"; then
         echo "blast_radius_collect: semodule -i failed for ${pp}" >&2
         isolated_store_destroy "${store_prefix}"
         return 1
@@ -82,8 +82,9 @@ collect_side() {
     sort -u -o "${allow_out}" "${allow_out}"
 
     errf="$(mktemp)"
-    sesearch -T "${kern}" >"${type_out}.raw" 2>"${errf}"
-    ec=$?
+    # set -e would abort on sesearch's exit 1 before the status check below.
+    ec=0
+    sesearch -T "${kern}" >"${type_out}.raw" 2>"${errf}" || ec=$?
     if [[ -s "${errf}" ]]; then
         cat "${errf}" >&2
         rm -f "${errf}" "${type_out}.raw"

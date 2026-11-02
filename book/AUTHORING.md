@@ -75,7 +75,7 @@ Not supported: footnotes, setext headings (`===` under a line), HTML comments, d
 |---|---|---|
 | `NN-slug.md` or `NN-slug.md#anchor` | another chapter | the page exists in `book.toml`; the anchor exists in that page |
 | `repo:path/to/file` | a file in this repository | the path must exist in the worktree |
-| `../selinux/myapp.fc`, `../../cli/`, `selinux/` | repository paths written relative to the chapter | resolved and validated, then rendered as a GitHub URL |
+| `../selinux/myapp/myapp.fc`, `../../cli/`, `selinux/` | repository paths written relative to the chapter | resolved and validated, then rendered as a GitHub URL |
 | `asset:name.svg` | a file in `book/assets/` | the file must exist |
 | `https://…` | external | not validated |
 A link to another chapter written as a repository path (`../part2/09-file-contexts-and-the-label-lifecycle.md`)
@@ -86,7 +86,7 @@ Cross-chapter anchors are validated, so if you rename a heading you must fix the
 Prefer adding an explicit anchor (`## Heading {#stable-id}`) for anything another chapter cites.
 
 A code span that names a repository path is also a claim: `` `scripts/dev_generate_policy.sh` ``,
-`` `selinux/myapp.fc` `` and `` `config/myapp.manifest.yml` `` must exist in the worktree, or
+`` `selinux/myapp/myapp.fc` `` and `` `config/myapp.manifest.yml` `` must exist in the worktree, or
 `make book-check` fails. Write a claimed path from the repository root, or relative to the chapter
 (`part4/19-canary-soak-enforce.md`). A shorthand (`tasks/rollback.yml`,
 `01-mislabeled-var-lib/expected.json`) claims nothing, so it is never checked and a reader cannot
@@ -114,8 +114,7 @@ Two paths are exempt because they are gitignored: `ansible/inventory.dev.yml` an
 ## Prose rules
 
 The book follows the `simple-english` skill (ASD-STE100 in spirit, Plain mode). Read
-`~/code/SimpleEnglish/skills/simple-english/SKILL.md` before you write a chapter. The build
-checks links and structure. These rules are what it cannot see.
+the `simple-english` skill at <https://github.com/AminBlg/SimpleEnglish> before you write a chapter. The build checks links and structure. These rules are what it cannot see.
 
 - One sentence, one fact. Twenty words in a step, twenty-five in a description.
 - No em-dash and no semicolon in prose. Write two sentences, or name the relation: because,

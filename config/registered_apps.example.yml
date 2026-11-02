@@ -1,7 +1,0 @@
-# Multi-app soak monitoring registry (optional).
-# Used by future soak_exceptions_all.sh or AAP workflow loops.
-apps:
-  - app_name: myapp
-    manifest: config/myapp.manifest.yml
-  - app_name: payments
-    manifest: config/payments.manifest.example.yml

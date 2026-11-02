@@ -198,7 +198,7 @@ $ export_app_avcs_to_file policy_out/avc.log boot shopapi_t shopapi_backend_t /v
 # Then subtract what the installed policy already allows, and see what is left:
 $ python3 cli/verify_avc_coverage.py \
     --avc-log policy_out/avc.log \
-    --te selinux/myapp.te \
+    --te selinux/myapp/myapp.te \
     --manifest config/myapp.manifest.yml
 ```
 

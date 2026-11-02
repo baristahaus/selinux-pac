@@ -18,7 +18,7 @@ Source3:        selinux-manifest.yml
 
 %description
 Custom SELinux policy module (shopapi) for the Spring Boot demo JVM.
-Process domain shopapi_t is set with systemd SELinuxContext= (java is shared bin_t).
+ExecStart is the wrapper /opt/shopapi/bin/shopapi (shopapi_exec_t); init_daemon_domain moves it to shopapi_t; the system JVM is bin_t and runs under the reviewed corecmd_exec_bin exception.
 
 %prep
 
@@ -35,18 +35,13 @@ install -m 0644 %{SOURCE2} %{buildroot}%{_datadir}/doc/%{name}-%{version}/shopap
 %selinux_relabel_pre -s targeted
 
 %post
+# Install the module only. Do not start the service. Canary sets the domain
+# permissive and then restarts it.
 %selinux_modules_install -s targeted %{_datadir}/selinux/packages/shopapi.pp
-if command -v semanage >/dev/null 2>&1; then
-    semanage port -a -t shopapi_port_t -p tcp 8091 2>/dev/null || \
-        semanage port -m -t shopapi_port_t -p tcp 8091 2>/dev/null || true
-fi
 
 %postun
 if [ $1 -eq 0 ]; then
     %selinux_modules_uninstall -s targeted shopapi
-    if command -v semanage >/dev/null 2>&1; then
-        semanage port -d -p tcp 8091 2>/dev/null || true
-    fi
 fi
 
 %posttrans

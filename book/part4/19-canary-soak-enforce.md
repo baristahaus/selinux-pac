@@ -34,8 +34,8 @@ and the operator sees the first host's result before the fleet moves.
 The role's `canary.yml` does these things in order, and every one of them is a task you can read:
 
 1. **Disable `dontaudit` for the soak window**. This is a host-wide change, so a denial that policy deliberately kept quiet cannot hide from the soak.
-2. **Register port labels** from the committed manifest. The role prefers the packaged CIL, and templates the manifest when the CIL is absent. Ports come from git, not from someone typing `semanage port` on the host.
-3. **Make one domain permissive** with `semanage permissive -a <domain>`, for the application's own domain only. The host stays enforcing. The application logs instead of blocking.
+2. **Register port labels** from the committed manifest. The role reads the host's port table with `semanage port -l`, then asks `scripts/lib/app_manifest.py check-port` what to do for each entry. It runs `semanage port -a` only when the port is free and no other type owns it. It never runs `semanage port -m`. Ports come from git, not from someone typing `semanage port` on the host.
+3. **Make one domain permissive** with `community.general.selinux_permissive` (which runs `semanage permissive -a <domain>`), for the application's own domain only. The host stays enforcing. The application logs instead of blocking.
 4. **Label and verify paths**. Make sure that the application directories exist, run `restorecon` on them, then check the contexts before any service restarts.
 5. **Record the clock**. Write the canary timestamp to the soak marker (`soak_marker_file`, by default `<var_dir>/selinux_canary_deployed_at`). This runs before the restart on purpose. The marker is the left edge of the AVC window that step 7 reads, so the denials of the restart itself are inside it.
 6. **Restart and probe**. Reset the systemd failure counters, restart the application services, run `restorecon` on the runtime directory, then run the unified endpoint smoke:
@@ -122,7 +122,7 @@ The same playbooks run from a laptop before AAP exists. That is how you rehearse
 
 ::: try Read the soak status without changing anything
 On the controller, with the production inventory written by
-`bash scripts/setup_rhel_hosts.sh write --qa-host … --prod-host …`:
+`bash lab/setup_rhel_hosts.sh write --qa-host … --prod-host …`:
 
 ```bash
 ansible-playbook -i ansible/inventory.production.yml ansible/soak_status.yml --limit canary

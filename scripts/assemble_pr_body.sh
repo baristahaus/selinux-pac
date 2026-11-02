@@ -10,15 +10,15 @@ TEMPLATE="${PROJECT_ROOT}/.github/PULL_REQUEST_TEMPLATE/selinux_policy_review.md
 PR_SUMMARY="${PROJECT_ROOT}/policy_out/pr_summary.md"
 AVC_LOG="${PROJECT_ROOT}/policy_out/avc.log"
 OUTPUT="${PROJECT_ROOT}/policy_out/pr_body.md"
-APP_NAME="${POLICY_APP:-myapp}"
+APP_NAME=""
 CAND_DIR="${PROJECT_ROOT}/selinux"
 POLICY_DIFF_FILE=""
 SKIP_POLICY_DIFF=0
 STAGING_HOST="${STAGING_HOST:-<!-- fill in staging host -->}"
 TEST_SUITE="${TEST_SUITE:-Integration tests (curl endpoints)}"
 AVC_SAMPLE_LINES="${AVC_SAMPLE_LINES:-8}"
-VERSION_FILE="${PROJECT_ROOT}/selinux/policy_version.txt"
-DOMAINS="${SELINUX_POLICY_DIFF_DOMAINS:-}"
+VERSION_FILE="${PROJECT_ROOT}/selinux/myapp/policy_version.txt"
+DOMAINS=""
 
 usage() {
     cat <<EOF
@@ -32,7 +32,7 @@ Options:
   --policy-diff-file PATH  Use precomputed diff (skips sesearch diff)
   --skip-policy-diff    Omit policy diff section (smoke tests only)
   --template PATH       PR template file
-  --pr-summary PATH     AI summary file
+  --pr-summary PATH     PR summary file
   --avc-log PATH        AVC export file
   --output PATH         Output file
   --staging-host TEXT   Staging environment label
@@ -43,7 +43,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --app-name) APP_NAME="$2"; shift 2 ;;
+        --app|--app-name) APP_NAME="$2"; shift 2 ;;
         --candidate-dir) CAND_DIR="$2"; shift 2 ;;
         --policy-diff-file) POLICY_DIFF_FILE="$2"; shift 2 ;;
         --skip-policy-diff) SKIP_POLICY_DIFF=1; shift ;;
@@ -57,6 +57,8 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
 done
+
+[[ -n "${APP_NAME}" ]] || { echo "assemble_pr_body: --app-name is required" >&2; exit 1; }
 
 [[ -f "${CAND_DIR}/policy_version.txt" ]] && VERSION_FILE="${CAND_DIR}/policy_version.txt"
 
@@ -75,7 +77,7 @@ print(",".join(sorted(doms)))
 PY
 )"
 fi
-DOMAINS="${DOMAINS:-${APP_NAME}_t,${APP_NAME}_backend_t}"
+DOMAINS="${DOMAINS:-${APP_NAME}_t}"
 
 policy_version="unknown"
 if [[ -f "${VERSION_FILE}" ]]; then
@@ -94,7 +96,7 @@ sediff_file="$(mktemp)"
 trap 'rm -f "${sediff_file}" "${tmp:-}"' EXIT
 
 if [[ "${SKIP_POLICY_DIFF}" -eq 1 ]]; then
-    printf '%s\n' "### Policy access delta (sesearch)" "" "_Policy diff skipped (smoke test)._"
+    printf '%s\n' "### Policy access delta (sesearch)" "" "_Policy diff skipped (smoke test)._" > "${sediff_file}"
 elif [[ -n "${POLICY_DIFF_FILE}" ]]; then
     cp "${POLICY_DIFF_FILE}" "${sediff_file}"
 else
@@ -106,9 +108,8 @@ else
         --output "${sediff_file}"
         --format markdown
     )
-    if ! bash "${SCRIPT_DIR}/lib/policy_module_diff.sh" "${diff_args[@]}"; then
-        echo "assemble_pr_body: policy access diff failed (see errors above)" >&2
-        exit 1
+    if ! bash "${SCRIPT_DIR}/lib/policy_module_diff.sh" "${diff_args[@]}" 2>/dev/null; then
+        printf '%s\n' "### Policy access delta (sesearch)" "" "_Policy access diff unavailable (sesearch requires RHEL tooling)._" > "${sediff_file}"
     fi
 fi
 

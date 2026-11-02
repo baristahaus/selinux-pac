@@ -45,7 +45,7 @@ Custom types declared inside require block
 Forbidden allow rule targeting high-privilege type: shadow_t
 Forbidden broad var_t:file write — use dedicated application types
 Missing policy_module() declaration
-Domain myapp_t not referenced in selinux/myapp.te
+Domain myapp_t not referenced in selinux/myapp/myapp.te
 ```
 
 The same verdicts also live in `cli/policy_rules.py`. The generator carries three lists: `FORBIDDEN_TARGET_TYPES` (`shadow_t`, `unconfined_t`, `sysadm_t`, `security_t`, `selinux_config_t`, `passwd_file_t`), `GENERIC_FILE_TYPES` (`var_t`, `var_lib_t`, `var_log_t`, `var_run_t`, `usr_t`, `etc_t`, `tmp_t`, `default_t`, `unlabeled_t`, `home_root_t`, `user_home_t`, `user_home_dir_t`), and `GENERIC_PORT_TYPES` (`unreserved_port_t`, `port_t`, `reserved_port_t`, `ephemeral_port_t`). Only the first list is a refusal. A tuple targeting a `FORBIDDEN_TARGET_TYPES` name is `forbidden` and blocks generation. The other two lists route instead. A `GENERIC_FILE_TYPES` target becomes `fc_fix` or `fc_drift` when the path can carry a label of its own, and a plain `direct` allow when it cannot. A `GENERIC_PORT_TYPES` target becomes `private_port`, which moves the port onto the application's own type through the manifest.
@@ -98,7 +98,7 @@ evidence. The base policy is full of them for exactly that reason: a browser pro
 `~/.config`, or a service checking a file it will never find. That keeps normal operation from
 filling `audit.log` with failures nobody will act on.
 
-Two commands manage the suppression. `semodule -DB` disables the entire `dontaudit` block on the host. `semodule -B` restores it. The canary role runs `-DB` at canary start, so soak does not miss denials hidden by `dontaudit`. A failed canary and the rollback path both run `-B`. The host-wide change is documented in [302-PRODUCTION_READINESS.md](docs/admin/302-PRODUCTION_READINESS.md) §6 and [207-SELINUX_BEST_PRACTICES.md](docs/policy/207-SELINUX_BEST_PRACTICES.md) §4. Running `-DB` sends you after the same application bug you chase anyway, but it shows the denials. Before you conclude that a soak found zero denial, run it.
+Two commands manage the suppression. `semodule -DB` disables the entire `dontaudit` block on the host. `semodule -B` restores it. The canary role runs `-DB` at canary start, so soak does not miss denials hidden by `dontaudit`. A failed canary and the rollback path both run `-B`. The host-wide change is documented in the Canary section of [Shipping a policy with sepac](../../docs/shipping.md). Running `-DB` sends you after the same application bug you chase anyway, but it shows the denials. Before you conclude that a soak found zero denial, run it.
 
 `auditallow` is the mirror image, and it does not grant a tuple either. It makes an access that an
 `allow` rule already permits emit an AVC record. `dontaudit` hides a denial. `auditallow` exposes
@@ -115,14 +115,9 @@ domain on the permissive list. So the kernel records every denial for `myapp_t` 
 and does not block the access. The kernel still evaluates the policy and still writes the AVC.
 What changes is the answer, not the visibility.
 
-This repository carries that declaration as [`selinux/myapp_canary.te`](selinux/myapp_canary.te). That is a small overlay module: one `policy_module` line, a `require` block, and three `permissive` declarations. Its job is the flag on `myapp_t` and on `myapp_backend_t` and `init_t` for the systemd edge cases. The canary role installs it only when `semanage` is missing on the host. When `semanage` exists, the role uses `community.general.selinux_permissive` instead. That is the same declaration loaded by `semanage permissive -a myapp_t`. Enforce removes the flag either way: `semanage permissive -d {{ domain }}`, or `semodule -r` of the overlay.
+The canary role sets that flag at run time, with `community.general.selinux_permissive`. The role refuses to start when `semanage` is missing. The repository does not carry a permissive overlay module. The enforce role removes the flag with the same module (`permissive: false`). A failed enforce restores the flag in its `rescue:` block, so the domain stays permissive while the operator fixes the cause. Rollback sets the flag again, and it falls back to `semanage permissive -a {{ domain }}` when the module is unavailable.
 
-Both forms have the same scope: one domain, permissive. Only the *delivery* differs, and that is
-the point. The overlay is a versioned artifact. A PR reviews it, the RPM ships it, and the enforce
-role removes it. `semanage permissive -a` is host-local state: it survives RPM changes, appears
-nowhere in the git history, and stays until somebody removes it. Chapter 2 covers the
-running-domain view. This chapter's only concern is that no permissive declaration, compiled or
-runtime, is a fix for a denial.
+The flag is host-local state. It survives RPM changes, appears nowhere in the git history, and stays until somebody removes it. The deploy report records it, and the enforce or rollback path removes it. Chapter 2 covers the running-domain view. This chapter's only concern is that no permissive declaration, compiled or runtime, is a fix for a denial.
 
 ## Boolean-guarded rules and conditional policy
 
@@ -221,13 +216,13 @@ A denial you cannot explain is a finding, not an obstacle. If the log is blank a
 
 `scripts/validate_forbidden_patterns.sh` fires on each line in the table above. It needs the
 module's `.te` *and* `.fc` in the directory it is pointed at. `POLICY_MODULE` picks the name. The
-tracked `selinux/myapp.te` passes it. The clean module is the control case. So copy both files,
+tracked `selinux/myapp/myapp.te` passes it. The clean module is the control case. So copy both files,
 write the bad rules in by hand, and watch the gate refuse them:
 
 ```bash
 # copy first — never edit the tracked files:
 $ mkdir -p /tmp/myapp-check
-$ cp selinux/myapp.te selinux/myapp.fc /tmp/myapp-check/
+$ cp selinux/myapp/myapp.te selinux/myapp/myapp.fc /tmp/myapp-check/
 $ cd /tmp/myapp-check
 
 # the clean copy passes:
@@ -254,7 +249,7 @@ Each error the script prints names a house rule. Each house rule is the only thi
 
 - Read a denied tuple and identify which of the three families it belongs to.
 - Run `scripts/validate_forbidden_patterns.sh` and read each failure message as a house rule.
-- Read the fixture directories under `docs/examples/fixtures/deterministic/` and recognize the `forbidden` and `needs_review` verdicts.
+- Read the fixture directories under `tests/fixtures/deterministic/` and recognize the `forbidden` and `needs_review` verdicts.
 - Tell the difference between a `dontaudit` silence and a real allow.
 - Pick the alternative: rename the path, drop the port, or accept the denial.
 

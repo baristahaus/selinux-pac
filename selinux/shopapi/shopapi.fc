@@ -1,5 +1,7 @@
 # Paths match config/shopapi.manifest.yml (install_root, var_dir, log_dir, runtime_dir).
-/opt/shopapi(/.*)?                  gen_context(system_u:object_r:shopapi_exec_t,s0)
+# The last matching line wins. Only the wrapper is the entrypoint.
+/opt/shopapi(/.*)?                  gen_context(system_u:object_r:shopapi_lib_t,s0)
+/opt/shopapi/bin/shopapi            -- gen_context(system_u:object_r:shopapi_exec_t,s0)
 /var/lib/shopapi(/.*)?              gen_context(system_u:object_r:shopapi_var_lib_t,s0)
 /var/log/shopapi(/.*)?              gen_context(system_u:object_r:shopapi_log_t,s0)
 /run/shopapi(/.*)?                  gen_context(system_u:object_r:shopapi_var_run_t,s0)

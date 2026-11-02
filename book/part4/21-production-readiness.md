@@ -17,7 +17,7 @@ The readiness check is a tuple of four values, and the gate at `scripts/check_so
 | **Ownership** | Who watches a denial that slips past soak and shows up in production | The on-call admin with `emergency_rollback.yml` signed off, the app team with the deploy report JSON |
 | **Reversibility** | How fast the domain can return to permissive after enforce | `emergency_rollback.yml` sets permissive first. `dnf downgrade` follows if `rollback_dnf_version` is set |
 
-The gate at §12 of the production runbook makes all three measurable pieces a single JSON payload from `collect_soak_facts.sh`. A deploy report file at `/var/lib/myapp/selinux_deploy_report.json` carries the same four values as `status`, `endpoints_exercised`, `domain_context_verified`, and the context map. The canary, enforce, and rollback playbooks write that file. The operator reads it before every enforce, not the other way around.
+The soak gate in [Shipping a policy with sepac](../../docs/shipping.md) makes all three measurable pieces a single JSON payload from `collect_soak_facts.sh`. A deploy report file at `/var/lib/myapp/selinux_deploy_report.json` carries the same four values as `status`, `endpoints_exercised`, `domain_context_verified`, and the context map. The canary, enforce, and rollback playbooks write that file. The operator reads it before every enforce, not the other way around.
 
 ## The phases, each one's claim and each one's limit
 
@@ -56,13 +56,13 @@ Three checks show up most often in the failure card. Each one is one command, an
 |-------|----------------|----------------------------------|
 | **Path labeling at deploy time**: `verify_file_contexts.sh` dry-run before `systemctl restart` | `semodule -i` installs types. Existing files keep their old contexts. A restart without relabeling lets the service start as `unconfined_t`, while the policy was never applied. | The script prints `Mislabeled paths under <dir> (restorecon would change):` followed by the `restorecon -Rv -n` lines, then `File context verification failed — run restorecon before restarting the service`. |
 | **Systemd unit attestation**: `systemctl is-active` plus the HTTP probe, plus the domain context | A mislabeled entrypoint (`init_t`) can pass all HTTP gates with zero AVCs while the custom policy was never applied. `domain_context_verified: true` in the deploy report is the answer. | `/health` returns 200 and no AVC is written, while `ps -eZ \| grep myapp` shows the process in `init_t` or `unconfined_service_t` instead of the manifest's `<app>_t`. Zero AVCs plus a green probe is the signature: an unconfined or mislabeled domain never asks the policy a question. |
-| **Daily AVC review across the scheduler domain**: `monitor_avc.sh` for `logrotate_t`, monitoring agents, and `cron_t` | Root crontab runs as `cron_t`. HTTP probes on `shopapi_t` exercise the log path but never exercise `logrotate_t`. Phase 3 of [302-PRODUCTION_READINESS.md](docs/admin/302-PRODUCTION_READINESS.md) §8 requires that scheduler AVCs are captured and extended before enforce. | `net_new_count` > 0 during soak, or `net_new_count = 0` because `ausearch -ts recent` ran for ~10 minutes before logrotate rotated the logs, and the denial dropped into a new file. |
+| **Daily AVC review across the scheduler domain**: `monitor_avc.sh` for `logrotate_t`, monitoring agents, and `cron_t` | Root crontab runs as `cron_t`. HTTP probes on `shopapi_t` exercise the log path but never exercise `logrotate_t`. The Soak section of [Shipping a policy with sepac](../../docs/shipping.md) requires that scheduler AVCs are captured and extended before enforce. | `net_new_count` > 0 during soak, or `net_new_count = 0` because `ausearch -ts recent` ran for ~10 minutes before logrotate rotated the logs, and the denial dropped into a new file. |
 
-The rule in §5 of the best practices document: `ausearch --input-logs --subject myapp_t` is how the scripts query the audit trail from a cron job or a playbook. `--input-logs` tells `ausearch` to take the log location from `auditd.conf`, instead of relying on stdin or the default path. It is about where the search reads from, not about rotation. `ausearch` walks the rotated files in the log directory either way. The false "zero AVCs" that a long soak can produce comes from a skewed clock, not from rotation. That is why the repo converts the epoch of the marker with `avc_epoch_to_ts` instead of using `-ts recent`.
+The rule in [102: SELinux commands](../../docs/guides/102-COMMANDS.md): `ausearch --input-logs --subject myapp_t` is how the scripts query the audit trail from a cron job or a playbook. `--input-logs` tells `ausearch` to take the log location from `auditd.conf`, instead of relying on stdin or the default path. It is about where the search reads from, not about rotation. `ausearch` walks the rotated files in the log directory either way. The false "zero AVCs" that a long soak can produce comes from a skewed clock, not from rotation. That is why the repo converts the epoch of the marker with `avc_epoch_to_ts` instead of using `-ts recent`.
 
 ## Canary groups and blast radius
 
-The inventory layout from §10 is the blast-radius classifier's own input.
+The inventory layout in `ansible/inventory.example.yml` is the blast-radius classifier's own input.
 
 ```text
 inventory.production.yml
@@ -80,7 +80,7 @@ The blast-radius classifier already told you about the change before you run the
 
 ## The sign-off checklist as a table
 
-The checklist in §13 of the production runbook is the accountability map. Each row names the required evidence and the person who owns it.
+The sign-off checklist in this chapter is the accountability map. Each row names the required evidence and the person who owns it.
 
 | Row | Required evidence | Accountable person |
 |-----|-------------------|--------------------|
@@ -116,13 +116,13 @@ Each phase buys evidence, and each phase has a limit. The policy covers every co
 
 ::: note The honest case where nothing changed
 
-Sometimes the right answer is no policy change at all. The generator refuses JWS, EAP, httpd, named, and postgresql unless you pass `--force "reason"`. In one case the app is unconfined because the vendor RPM is not installed. There `ps -eZ | grep unconfined_java_t` shows the process, and `semodule -l` shows the module loaded. `--tune-report` then prints host commands instead of a `.te`. There the pipeline ends at host tuning. Enforce does not apply. The operator notes this in the change ticket and closes it without generating a module. The same pattern appears in §2.5 of the production runbook. Situation maps to action, and action maps to what the operator does. There `generate` is the only row that generates.
+Sometimes the right answer is no policy change at all. The generator refuses JWS, EAP, httpd, named, and postgresql unless you pass `--force "reason"`. In one case the app is unconfined because the vendor RPM is not installed. There `ps -eZ | grep unconfined_java_t` shows the process, and `semodule -l` shows the module loaded. `--tune-report` then prints host commands instead of a `.te`. There the pipeline ends at host tuning. Enforce does not apply. The operator notes this in the change ticket and closes it without generating a module. The same pattern appears in the triage table in [docs/sepac.md](../../docs/sepac.md). Situation maps to action, and action maps to what the operator does. There `generate` is the only row that generates.
 
 :::
 
 ::: try Run the soak gate against the lab
 
-The invocation below is the host-side CLI for the same checks that the enforce role makes. It is the same one documented with pass and fail examples in §12 of the production runbook. The role itself runs `collect_soak_facts.sh` and evaluates its JSON. Both answer the same questions, and `check_soak_ready.sh` is the one you can run by hand. Run it on `rhel-qa`, where the checkout exists, the marker file exists, and the operator controls the clock.
+The invocation below is the host-side CLI for the same checks that the enforce role makes. It is the same one documented with pass and fail examples in the Soak section of [Shipping a policy with sepac](../../docs/shipping.md). The role itself runs `collect_soak_facts.sh` and evaluates its JSON. Both answer the same questions, and `check_soak_ready.sh` is the one you can run by hand. Run it on `rhel-qa`, where the checkout exists, the marker file exists, and the operator controls the clock.
 
 ```bash
 cd /home/<user>/selinux-pac
@@ -161,5 +161,5 @@ Each line is the reading the gate makes of a tuple that the operator must unders
 :::
 ## What you can do now
 
-- Run `bash scripts/check_soak_ready.sh --auto-tier --base-policy selinux/myapp.te --candidate-policy policy_out/myapp.te --marker-file /var/lib/myapp/selinux_canary_deployed_at --min-days 7` against the candidate delta and read the `Blast-radius tier:` and `Classifier reason:` lines as the delta's own judgment.
+- Run `bash scripts/check_soak_ready.sh --auto-tier --base-policy selinux/myapp/myapp.te --candidate-policy policy_out/myapp.te --marker-file /var/lib/myapp/selinux_canary_deployed_at --min-days 7` against the candidate delta and read the `Blast-radius tier:` and `Classifier reason:` lines as the delta's own judgment.
 - Rehearse the rollback. `emergency_rollback.yml` is not a safety net. It is the second half of the same plan.

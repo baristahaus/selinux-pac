@@ -93,7 +93,7 @@ One of them needs no Linux host at all:
 Every listing that claims to be runnable was executed while writing the book. Two mechanisms keep
 that claim true:
 
-1. `make check` runs the generator against `docs/examples/fixtures/deterministic/` and compares
+1. `make check` runs the generator against `tests/fixtures/deterministic/` and compares
    each result to its `expected.json`. If the code changes, a claim about the behavior of the
    generator becomes a failing test.
 2. The build checks the book itself. Internal links, anchors, and every `repo:` reference to a

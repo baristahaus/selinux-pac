@@ -23,10 +23,6 @@ infer_policy_module_name() {
         echo "${explicit}"
         return 0
     fi
-    if [[ -n "${POLICY_MODULE:-}" ]]; then
-        echo "${POLICY_MODULE}"
-        return 0
-    fi
     local te name="" count=0
     for te in "${policy_dir}"/*.te; do
         [[ -e "${te}" ]] || continue
@@ -61,8 +57,8 @@ compile_policy_module() {
     if ! has_selinux_devel; then
         if [[ "$(uname -s)" == Darwin ]]; then
             echo "[ERROR] macOS has no selinux-policy-devel. Compile on rhel-qa, then copy the .pp here:" >&2
-            echo "  ssh ansible@192.168.64.6 'cd ~/selinux-pac && bash scripts/compile_and_validate.sh selinux'" >&2
-            echo "  scp ansible@192.168.64.6:~/selinux-pac/selinux/${module_name}.pp ${policy_dir}/" >&2
+            echo "  ssh \${SSH_USER}@\${QA_HOST} 'cd ~/selinux-pac && bash scripts/compile_and_validate.sh selinux'" >&2
+            echo "  scp \${SSH_USER}@\${QA_HOST}:~/selinux-pac/selinux/${module_name}.pp ${policy_dir}/" >&2
         else
             echo "[ERROR] Install selinux-policy-devel (dnf install selinux-policy-devel). Compile on rhel-qa, not a non-SELinux host." >&2
         fi
@@ -75,7 +71,13 @@ compile_policy_module() {
     if [[ -f "${if_file}" ]]; then
         cp "${if_file}" "${work_dir}/"
     fi
-    make -C "${work_dir}" -f /usr/share/selinux/devel/Makefile "${module_name}.pp"
+    # Callers often invoke this from `if !`, which disables set -e for the
+    # whole function. A failing make must still return non-zero; otherwise
+    # `rm -rf` below succeeds and the caller treats a missing .pp as success.
+    if ! make -C "${work_dir}" -f /usr/share/selinux/devel/Makefile "${module_name}.pp"; then
+        rm -rf "${work_dir}"
+        return 1
+    fi
     cp "${work_dir}/${module_name}.pp" "${output_pp}"
     rm -rf "${work_dir}"
 }

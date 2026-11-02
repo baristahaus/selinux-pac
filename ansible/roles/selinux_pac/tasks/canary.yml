@@ -4,6 +4,14 @@
     path: /usr/sbin/semanage
   register: semanage_bin
 
+- name: Require semanage for the canary
+  ansible.builtin.fail:
+    msg: >-
+      semanage is not installed. Canary will not load a permissive overlay
+      (that path made init_t permissive while getenforce stayed Enforcing).
+      Install policycoreutils-python-utils.
+  when: not semanage_bin.stat.exists
+
 - name: Require policy_pp_src when not installing from RPM
   ansible.builtin.fail:
     msg: >-
@@ -40,51 +48,30 @@
       register: semodule_db
       changed_when: semodule_db.rc == 0
 
-    - name: Register TCP/UDP ports from manifest
-      community.general.seport:
-        ports: "{{ item.port | string }}"
-        proto: "{{ item.proto | default('tcp') }}"
-        setype: "{{ item.type }}"
-        state: present
-      loop: "{{ selinux_ports_list }}"
+    - name: Read current SELinux port assignments
+      ansible.builtin.command: semanage port -l
+      register: semanage_port_list
+      changed_when: false
       when:
         - semanage_bin.stat.exists
         - selinux_ports_list | length > 0
 
-    - name: Stat packaged TCP port CIL on controller
-      ansible.builtin.stat:
-        path: "{{ ports_cil_src }}"
-      register: ports_cil_stat
-      delegate_to: localhost
-      become: false
-      when: not semanage_bin.stat.exists
-
-    - name: Stage packaged TCP port CIL
-      ansible.builtin.copy:
-        src: "{{ ports_cil_src }}"
-        dest: "{{ ports_cil_staging }}"
-        mode: "0644"
+    - name: Register manifest ports without taking one another type owns
+      ansible.builtin.shell: |
+        set -euo pipefail
+        action="$(printf '%s\n' "$PORT_LIST" | python3 "{{ selinux_ops_dir }}/lib/app_manifest.py" check-port --port "{{ item.port }}" --proto "{{ item.proto | default('tcp') }}" --type "{{ item.type }}")"
+        printf '%s\n' "${action}"
+        if [[ "${action}" == "add" ]]; then
+          semanage port -a -t "{{ item.type }}" -p "{{ item.proto | default('tcp') }}" "{{ item.port }}"
+        fi
+      environment:
+        PORT_LIST: "{{ semanage_port_list.stdout | default('') }}"
+      loop: "{{ selinux_ports_list }}"
       when:
-        - not semanage_bin.stat.exists
-        - ports_cil_stat.stat.exists
-
-    - name: Template manifest TCP port CIL when packaged CIL absent
-      ansible.builtin.template:
-        src: ports_from_manifest.cil.j2
-        dest: "{{ ports_cil_staging }}"
-        mode: "0644"
-      when:
-        - not semanage_bin.stat.exists
-        - not (ports_cil_stat.stat.exists | default(false))
+        - semanage_bin.stat.exists
         - selinux_ports_list | length > 0
-
-    - name: Install TCP port labels (CIL)
-      ansible.builtin.command: "semodule -i {{ ports_cil_staging }}"
-      when:
-        - not semanage_bin.stat.exists
-        - selinux_ports_list | length > 0
-      register: ports_cil_install
-      changed_when: ports_cil_install.rc == 0
+      register: port_register
+      changed_when: port_register.stdout is search('^add')
 
     - name: Enable permissive domain for canary
       community.general.selinux_permissive:
@@ -92,35 +79,13 @@
         permissive: true
       when: semanage_bin.stat.exists
 
-    - name: Stat FCOS permissive overlay on controller
-      ansible.builtin.stat:
-        path: "{{ stub_policy_src }}"
-      register: stub_pp_stat
-      delegate_to: localhost
-      become: false
-      when: not semanage_bin.stat.exists
-
-    - name: Fail when FCOS overlay module missing on controller
-      ansible.builtin.fail:
-        msg: >-
-          Build {{ stub_policy_src }} first:
-          POLICY_MODULE={{ stub_module_name }} bash scripts/compile_and_validate.sh {{ pac_manifest.policy.module_dir | default('selinux') }}
-      when:
-        - not semanage_bin.stat.exists
-        - not stub_pp_stat.stat.exists
-
-    - name: Stage FCOS permissive overlay
-      ansible.builtin.copy:
-        src: "{{ stub_policy_src }}"
-        dest: "{{ stub_policy_staging }}"
-        mode: "0644"
-      when: not semanage_bin.stat.exists
-
-    - name: Install FCOS permissive overlay
-      ansible.builtin.command: "semodule -i {{ stub_policy_staging }}"
-      when: not semanage_bin.stat.exists
-      register: fcos_overlay
-      changed_when: fcos_overlay.rc == 0
+    - name: Apply manifest SELinux booleans before the service starts
+      ansible.posix.seboolean:
+        name: "{{ item.name }}"
+        state: "{{ item.state | bool }}"
+        persistent: "{{ item.persistent | default(true) | bool }}"
+      loop: "{{ selinux_booleans_list | default([]) }}"
+      when: (selinux_booleans_list | default([])) | length > 0
 
     - name: Ensure persistent application directories exist
       ansible.builtin.file:
@@ -149,8 +114,22 @@
         --pre-service-restart
       changed_when: false
 
+    - name: Create root-owned soak state directory
+      ansible.builtin.file:
+        path: "{{ soak_marker_file | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
     - name: Record canary deploy timestamp for soak gate
-      ansible.builtin.shell: "date +%s > {{ soak_marker_file }}"
+      ansible.builtin.shell: |
+        date +%s > "{{ soak_marker_file }}"
+        chown root:root "{{ soak_marker_file }}"
+        chmod 0644 "{{ soak_marker_file }}"
+        auditctl -s | awk '/^lost / { print $2 }' > "{{ soak_marker_file }}.audit_lost"
+        chown root:root "{{ soak_marker_file }}.audit_lost"
+        chmod 0644 "{{ soak_marker_file }}.audit_lost"
       changed_when: true
 
     - name: Reset systemd failure counters before service restart
@@ -158,6 +137,9 @@
       changed_when: false
       failed_when: false
 
+    # shopapi_t is already permissive. This restart is the first start in that
+    # domain. The policy RPM %post must not systemctl restart; that would
+    # start the service enforcing before this task.
     - name: Restart application services via systemd
       ansible.builtin.systemd:
         name: "{{ item }}"
@@ -175,7 +157,6 @@
         {{ selinux_ops_dir }}/wait_for_endpoints.sh
         --manifest {{ app_manifest_path }}
         --host {{ http_probe_host }} --retries 15 --delay 2
-        {{ '' if semanage_bin.stat.exists else '--skip-domain-check' }}
       changed_when: false
 
     - name: Check for new domain AVC events (recent window)
@@ -195,6 +176,14 @@
       ansible.builtin.set_fact:
         avc_count: "{{ (avc_json.stdout | from_json).count | default(0) }}"
         avc_net_new_count: "{{ (avc_json.stdout | from_json).net_new_count | default(-1) }}"
+        avc_fail_closed: "{{ (avc_json.stdout | from_json).avc_fail_closed | default(true) }}"
+
+    - name: Fail when canary AVC monitor failed closed
+      ansible.builtin.command: >
+        {{ selinux_ops_dir }}/check_soak_gate.sh
+        --fail-closed {{ avc_fail_closed | bool | ternary('true', 'false') }}
+        --net-new {{ avc_net_new_count }}
+      changed_when: false
 
     - name: Fail when canary raw AVC count exceeds threshold
       ansible.builtin.fail:
@@ -231,15 +220,16 @@
           Recent {{ domain }} events: {{ avc_count }} raw,
           {{ avc_net_new_count }} net-new (thresholds {{ canary_max_avc | default(0) }} /
           {{ canary_max_net_new | default(0) }}).
-          Deploy report: {{ var_dir }}/selinux_deploy_report.json.
+          Deploy report: {{ pac_manifest.deploy.deploy_report_file | default('/var/lib/selinux-policy-ops/' ~ app_name ~ '/selinux_deploy_report.json') }}.
 
   rescue:
     - name: Restore dontaudit baseline after failed canary
-      ansible.builtin.command: semodule -B
+      ansible.builtin.command: >
+        {{ selinux_ops_dir }}/semodule_restore_dontaudit.sh --app {{ app_name }}
       changed_when: true
 
     - name: Canary deploy failed
       ansible.builtin.fail:
         msg: >-
-          Canary deploy failed; semodule -B restored dontaudit baseline.
+          Canary deploy failed. dontaudit was restored unless another app is still soaking.
           Inspect AVCs and deploy report if present.

@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-APP_NAME="${POLICY_APP:-myapp}"
+APP_NAME="${1:?Usage: post_pr_policy_diff_comment.sh APP_NAME}"
 MARKER="<!-- selinux-policy-module-diff -->"
 
 [[ -n "${GITHUB_REPOSITORY:-}" && -n "${GITHUB_EVENT_PATH:-}" ]] || {

@@ -1,5 +1,5 @@
 # Exercise the three-app demo scripts without a RHEL host.
-# Policy compile needs selinux-policy-devel (Fedora container).
+# Policy compile uses the same Stream 9 image as policy CI, or the rhel9-utm runner.
 name: Demo estate
 
 on:
@@ -10,19 +10,19 @@ on:
     branches:
       - main
     paths:
-      - "demo/**"
-      - "scripts/demo_present.sh"
-      - "scripts/demo_bootstrap.sh"
-      - "scripts/lib/demo_estate.sh"
+      - "lab/apps/**"
+      - "lab/demo_present.sh"
+      - "lab/demo_bootstrap.sh"
+      - "lab/lib/demo_estate.sh"
       - "selinux/shopapi/**"
       - "config/shopapi.manifest.yml"
       - ".github/workflows/demo-estate.yml"
   pull_request:
     paths:
-      - "demo/**"
-      - "scripts/demo_present.sh"
-      - "scripts/demo_bootstrap.sh"
-      - "scripts/lib/demo_estate.sh"
+      - "lab/apps/**"
+      - "lab/demo_present.sh"
+      - "lab/demo_bootstrap.sh"
+      - "lab/lib/demo_estate.sh"
       - "selinux/shopapi/**"
       - "config/shopapi.manifest.yml"
       - ".github/workflows/demo-estate.yml"
@@ -36,11 +36,11 @@ jobs:
       - name: Install Python deps for manifest parse
         run: pip3 install -q -r cli/requirements.txt
       - name: Customer dry-run (no SELinux, no JVM)
-        run: bash scripts/demo_present.sh --dry-run --no-type --auto --profile customer
+        run: bash lab/demo_present.sh --dry-run --no-type --auto --profile customer
       - name: Technical dry-run
-        run: bash scripts/demo_present.sh --dry-run --no-type --auto --profile technical
+        run: bash lab/demo_present.sh --dry-run --no-type --auto --profile technical
       - name: Syntax-check bootstrap
-        run: bash -n scripts/demo_bootstrap.sh && bash -n scripts/demo_present.sh && bash -n scripts/lib/demo_estate.sh
+        run: bash -n lab/demo_bootstrap.sh && bash -n lab/demo_present.sh && bash -n lab/lib/demo_estate.sh
       - name: Types-only module has no JVM cookbook allows
         run: |
           if grep -E '^[[:space:]]*allow.*(execmem|execstack|dac_override)' selinux/shopapi/shopapi.te; then
@@ -62,15 +62,19 @@ jobs:
           java-version: "17"
           cache: maven
       - name: Package Spring Boot JAR
-        run: mvn -q -DskipTests -f demo/shopapi/pom.xml package
+        run: mvn -q -DskipTests -f lab/apps/shopapi/pom.xml package
 
   shopapi-policy:
     name: shopapi-policy-compile
-    runs-on: ubuntu-latest
-    container: fedora:41
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
+    container: ${{ vars.RUNNER != 'rhel9-utm' && 'quay.io/centos/centos:stream9' || fromJSON('null') }}
     steps:
+      - name: Ensure sudo
+        run: command -v sudo >/dev/null 2>&1 || dnf install -y sudo
+      - name: Install git for checkout
+        run: sudo dnf install -y git
       - uses: actions/checkout@v4
       - name: Install selinux-policy-devel
-        run: dnf install -y selinux-policy-devel make python3
+        run: sudo dnf install -y selinux-policy-devel make python3
       - name: Compile types-only shopapi seed
-        run: POLICY_MODULE=shopapi SELINUX_DOMAIN=shopapi_t bash scripts/compile_and_validate.sh selinux/shopapi
+        run: bash scripts/compile_and_validate.sh selinux/shopapi --app shopapi

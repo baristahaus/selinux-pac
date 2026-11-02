@@ -9,7 +9,7 @@ SELinux policy is code. It is also the single source of truth for what processes
 1. **A compiled `.pp` copied into `/var/lib/selinux/targeted/custom/`**. Anyone with SSH access can reach it. `semodule -i` loads it, and nothing audits or rolls it back.
 2. **A signed RPM that installs the `.pp`, registers ports and labels, and pulls the policy back on the next boot**. `dnf` reaches it, the change is audit-tracked, and a downgrade is the rollback primitive.
 
-The rule that production hosts do not carry the repository exists for a reason. See `docs/admin/203-RHEL_TWO_HOST.md` and `docs/admin/304-ADOPTION_CHECKLIST.md` for the wording: "production host: no git clone; `selinux_ops_from_package: true`". If policy reaches the host as a tarball of your `selinux/` directory, the chain-of-custody question is open. Who compiled this? From which `.te`? On which box? If it reaches the host as an RPM signed with `SELINUX_GPG_NAME`, the answer is `rpm -Kv dist/*.rpm` plus `rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE} %{SIGPGP:pgpsig}\n'`. The first command checks the signature and the package digest. The repo at `SELINUX_RPM_REPO` keeps the signed artifact.
+The rule that production hosts do not carry the repository exists for a reason. See `docs/guides/302-TECHNICAL.md` and `docs/guides/README.md` for the wording: "production host: no git clone; `selinux_ops_from_package: true`". If policy reaches the host as a tarball of your `selinux/` directory, the chain-of-custody question is open. Who compiled this? From which `.te`? On which box? If it reaches the host as an RPM signed with `SELINUX_GPG_NAME`, the answer is `rpm -Kv dist/*.rpm` plus `rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE} %{SIGPGP:pgpsig}\n'`. The first command checks the signature and the package digest. The repo at `SELINUX_RPM_REPO` keeps the signed artifact.
 
 The practical differences are:
 
@@ -21,7 +21,7 @@ The practical differences are:
 | Install surface | every SSH key on the host | `dnf` against the internal repo, key-trusted |
 
 :::: why Why not keep a repo clone on prod?
-A `git clone` on prod lets you `tail -f selinux/myapp.te` and hot-fix a rule at 2am. That is exactly what SELinux suppresses: a developer in the box. The playbook owns the deploy. The RPM owns the binary on the host. The host only ever sees the artifact, not the source tree.
+A `git clone` on prod lets you `tail -f selinux/myapp/myapp.te` and hot-fix a rule at 2am. That is exactly what SELinux suppresses: a developer in the box. The playbook owns the deploy. The RPM owns the binary on the host. The host only ever sees the artifact, not the source tree.
 ::::
 
 ## The two-package split
@@ -69,18 +69,18 @@ The `%postun` scriptlet removes the module only on an explicit erase. `if [ $1 -
 `packaging/build_rpms.sh` is the single build driver. It does the following:
 
 1. It checks that `rpmbuild` is available. On macOS, when `rpmbuild` is missing, the script
-   runs `scripts/build_rpms_on_dev.sh` instead, unless you set `BUILD_RPMS_LOCAL=1`. That
+   runs `lab/build_rpms_on_dev.sh` instead, unless you set `BUILD_RPMS_LOCAL=1`. That
    script SSHes into `rhel-qa`, where `DEV_HOST` defaults to `192.168.64.6`, builds there, and
    `rsync`-copies the RPMs back to `dist/` on the controller. On Linux, when `rpmbuild` is
    missing, the script prints `Note: rpmbuild not found; validating spec parity only`, runs the
    parity check, and exits 0.
-2. It reads the version from `selinux/policy_version.txt` for `myapp` and from `selinux/shopapi/policy_version.txt` for `shopapi`. Both go through the `policy_version` helper in `scripts/lib/version.sh`. The script stashes the value into `--define "modver …"`. The spec does not hardcode its version. The text file is the single source of truth.
+2. It reads the version from `selinux/myapp/policy_version.txt` for `myapp` and from `selinux/shopapi/policy_version.txt` for `shopapi`. Both go through the `policy_version` helper in `scripts/lib/version.sh`. The script stashes the value into `--define "modver …"`. The spec does not hardcode its version. The text file is the single source of truth.
 3. Builds the `%prep` tree: copies scripts into `rpmbuild/BUILD/selinux-policy-ops-src/lib/`, the CLI under `lib/pac_cli/`, and the per-app `.pp`/`.te`/`.fc`/manifest into `SOURCES/`.
 4. It calls `scripts/validate_rpm_ops_parity.sh` once, up front. When `rpmbuild` is absent, that check is the whole run. The script guards the `selinux-policy-ops` source allowlist, not the per-app specs.
 5. Calls `scripts/compile_and_validate.sh` against the source trees, then runs `rpmbuild -ba` for each spec in turn.
 6. Copies every produced `.rpm` into `dist/` and lists it.
 
-The host needs `rpmbuild`, the SELinux policy toolchain (`make` / `checkmodule` / `semodule_package`), and `scripts/lib/version.sh` reachable from the workspace root. If `rpmbuild` is missing, the driver branches. On macOS it execs `scripts/build_rpms_on_dev.sh`, unless you set `BUILD_RPMS_LOCAL=1`. That script compiles and packs on rhel-qa, then copies `dist/*.rpm` back. On Linux it prints `Note: rpmbuild not found; validating spec parity only`, runs the parity check, and exits 0.
+The host needs `rpmbuild`, the SELinux policy toolchain (`make` / `checkmodule` / `semodule_package`), and `scripts/lib/version.sh` reachable from the workspace root. If `rpmbuild` is missing, the driver branches. On macOS it execs `lab/build_rpms_on_dev.sh`, unless you set `BUILD_RPMS_LOCAL=1`. That script compiles and packs on rhel-qa, then copies `dist/*.rpm` back. On Linux it prints `Note: rpmbuild not found; validating spec parity only`, runs the parity check, and exits 0.
 
 ## Publishing
 
@@ -102,7 +102,7 @@ Do this on `rhel-qa`, or on any host with `rpm-build`. Run the command only if `
 $ rpm -q --specfile /home/ansible/selinux-pac/packaging/shopapi-selinux.spec
 ```
 
-Without `rpmbuild`, `packaging/build_rpms.sh` takes a shortcut, and the shortcut depends on the host. On Linux it prints `Note: rpmbuild not found; validating spec parity only`, runs the parity script, and exits 0. On macOS it `exec`s `scripts/build_rpms_on_dev.sh`, which rsyncs to the dev host and builds there. If you only want to read the spec, neither path is what you want. The parity script is its own command.
+Without `rpmbuild`, `packaging/build_rpms.sh` takes a shortcut, and the shortcut depends on the host. On Linux it prints `Note: rpmbuild not found; validating spec parity only`, runs the parity script, and exits 0. On macOS it `exec`s `lab/build_rpms_on_dev.sh`, which rsyncs to the dev host and builds there. If you only want to read the spec, neither path is what you want. The parity script is its own command.
 
 ```bash
 $ bash scripts/validate_rpm_ops_parity.sh

@@ -1,3 +1,0 @@
-; FCOS / hosts without semanage — label workshop TCP ports (types from myapp module).
-(portcon tcp 8888 (system_u object_r myapp_port_t ((s0) (s0))))
-(portcon tcp 8889 (system_u object_r myapp_backend_port_t ((s0) (s0))))

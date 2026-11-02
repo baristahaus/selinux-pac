@@ -13,7 +13,7 @@ flowchart TD
   C --> D[deterministic_gen.py classifies denials]
   D --> E[policy_out/ artefacts written]
   E --> F[Human review + PR to selinux/]
-  F --> G[GitHub CI: forbidden-patterns + version-consistency]
+  F --> G[GitHub CI: four gates]
   G --> H[Merge]
   H --> I[Ansible canary deploy]
   I --> J[Soak monitor: net-new vs installed]
@@ -28,14 +28,14 @@ Numbered:
 5. Run `cli/deterministic_gen.py` against the AVC log, the manifest, and the committed `.te` / `.fc`. The script writes `policy_out/{app}.te`, `policy_out/{app}.fc`, `policy_out/pr_summary.md`, and `policy_out/findings.json`.
 6. Inspect the diff against `selinux/`. If every verdict passes and the access delta looks like the AVC lines, open the PR.
 7. The PR body (assembled by `scripts/assemble_pr_body.sh` from `.github/PULL_REQUEST_TEMPLATE/selinux_policy_review.md`, the generated summary, and the AVC log excerpt) carries the evidence for the reviewer.
-8. CI runs `forbidden-patterns` (via `scripts/validate_forbidden_patterns.sh`) and `version-consistency`. The generator already ran the same forbidden-pattern check, so those jobs are green.
+8. CI runs the four jobs in chapter 16. The generator already ran the forbidden-pattern check, so that job is green.
 9. CODEOWNERS review. The generator is not a reviewer. You still have to read each rule.
 
 Everything below happens before step 9. Compile and validate on `rhel-qa`. Production is Part IV.
 
 ## The generator at each stage
 
-The default engine is `cli/deterministic_gen.py`. It does not call an LLM and it does not consult a network API. Each verdict is reproduced from the same inputs.
+The default engine is `cli/deterministic_gen.py`. It does not call a language model and it does not consult a network API. Each verdict is reproduced from the same inputs.
 
 ```mermaid
 flowchart TD
@@ -66,39 +66,30 @@ What the generator deliberately does not do:
 - It never touches a production host. Not `semanage`, not `semodule`, not a policy load. The compiled `.pp` is produced only by `scripts/compile_and_validate.sh` on `rhel-qa`.
 - It never rewrites a baseline allow it cannot explain. If a tuple is already covered by the existing `.te`, the verdict is `baseline` and nothing changes.
 - It never emits a `forbidden` verdict as an allow. `shadow_t`, `unconfined_t`, and `sysadm_t` are on the blocked list (`cli/policy_rules.py`). Without `--force` and a recorded reason, a base-type allow that also collides with vendor policy does not land in the PR.
-- It never calls an LLM for the rule text. The deterministic engine is all Python, all rules. The optional LLM path only polishes prose.
+- It never calls a language model. The engine is all Python and all rules.
 
-Where the operator must run afterwards: compile and validate on `rhel-qa` (`sudo dnf install -y selinux-policy-devel setools-console`, then `bash scripts/compile_and_validate.sh selinux`). Production is Part IV: canary, soak, enforce, rollback.
+Where the operator must run afterwards: compile and validate on `rhel-qa` (`sudo dnf install -y selinux-policy-devel setools-console`, then `bash scripts/compile_and_validate.sh selinux/<app> --app <app>`). Production is Part IV: canary, soak, enforce, rollback.
 
-## The two engines
+## One engine, and the sepac wrapper
 
-| Switch | Engine | What it touches | When you need it |
-|---|---|---|---|
-| (none) | `cli/deterministic_gen.py` | `.te`/`.fc` only, all Python, no API | Default, and CI tests this. |
-| `--llm-summary` | `cli/deterministic_gen.py` + `cli/summarize_pr.py` | prose only, and the `.te`/`.fc` are identical to the row above | Optional admin narrative in `pr_summary.md`. |
-| `--legacy-full-policy` (deprecated) | `cli/selinux_gen.py` | `.te`/`.fc` **and** narrative | Legacy, and still available. |
+`cli/deterministic_gen.py` is the only engine. It reads the AVC log, the manifest, and the committed `.te` and `.fc`. It writes the policy and the PR summary. It does not call a language model, and it does not use a network API.
 
-The full LLM path lives in `cli/selinux_gen.py` and is opt-in. Its help text reads:
+Admins run it through `sepac generate APP`. That command calls `scripts/dev_generate_policy.sh`, which exports the AVCs, runs the engine, verifies coverage, and assembles the PR body. The flags you need:
 
-```text
---legacy-full-policy        Deprecated: LLM generates full .te/.fc
-                            (use dev_generate_policy.sh + summarize_pr.py)
-```
+| Flag | What it changes |
+|---|---|
+| `--apply` | Copies `policy_out/` into `selinux/APP/`, ready for a pull request |
+| `--approve PERM` | Accepts one `needs_review` permission after a reviewer reads it. Repeat the flag for each permission. |
+| `--force "reason"` | Overrides the vendor-policy check. The reason is recorded in the PR. |
+| `--skip-export` | Reuses an existing `policy_out/avc.log` instead of collecting a new one |
 
-The script refuses to run at all *without* `--legacy-full-policy`: the flag is what unlocks the deprecated path, and the refusal names the replacements:
-
-```text
-"  Summary: python3 cli/summarize_pr.py         (optional LLM prose)
-"  Or pass --legacy-full-policy to run the old all-in-one LLM path."
-```
-
-Every run of the LLM path requires `OPENAI_API_KEY` (or `OPENAI_BASE_URL` / `OPENAI_API_MODEL` for a LiteLLM endpoint). The policy text, the classifier, and the forbidden list are identical to the deterministic path. Only the model generates the closing summary.
+The engine refuses a `forbidden` verdict with or without `--approve`. The policy text, the classifier, and the forbidden list are the same in every run.
 
 ## Evidence discipline
 
 The PR body must carry enough evidence for a reviewer to read each rule and re-read the AVC line that asked for it. The template under `.github/PULL_REQUEST_TEMPLATE/selinux_policy_review.md` prescribes the sections that assemble into `policy_out/pr_body.md`. Each section is a claim you can check.
 
-The `pr_body.example.md` fixture in `docs/examples/pr_body.example.md` shows the shape the assembler produces:
+The `pr_body.example.md` fixture in `docs/guides/pr_body.example.md` shows the shape the assembler produces:
 
 ````markdown
 ### 1. Application Context
@@ -137,7 +128,7 @@ Every allow rule in the final diff must correspond to an AVC line the log contai
 
 Two gates catch the generator before it ships:
 
-1. **CI `forbidden-patterns`.** `scripts/validate_forbidden_patterns.sh` runs as a GitHub workflow (`.github/workflows/selinux-policy-ci.yml`). It scans `selinux/*.te` for `shadow_t`, `unconfined_t`, `sysadm_t`, and wildcard allows. That list is *shorter* than the generator's. `cli/policy_rules.py` refuses six target types (adding `security_t`, `selinux_config_t`, `passwd_file_t`). So a hand-written `.te` can pass this gate on a tuple the generator refuses. The generator runs this same script on its own output before you see it. So the gate is the backstop for edits made outside the generator. It is not a copy of the generator's rules. On a hand-edited `.te`, read the diff, not just the checkmark.
+1. **CI `forbidden-patterns`.** `scripts/validate_forbidden_patterns.sh` runs as a GitHub workflow (`.github/workflows/selinux-policy-ci.yml`). It scans each `selinux/<app>/<app>.te` for `shadow_t`, `unconfined_t`, `sysadm_t`, and wildcard allows. That list is *shorter* than the generator's. `cli/policy_rules.py` refuses six target types (adding `security_t`, `selinux_config_t`, `passwd_file_t`). So a hand-written `.te` can pass this gate on a tuple the generator refuses. The generator runs this same script on its own output before you see it. So the gate is the backstop for edits made outside the generator. It is not a copy of the generator's rules. On a hand-edited `.te`, read the diff, not just the checkmark.
 2. **CODEOWNERS review.** The PR template labels every submission `security`, `selinux`, `pending-admin-review`. The generator classifies denials. The reviewer classifies trust. A rule that names a private type under the application directory is a green signal. A rule that names a system type is a yellow signal, no matter how many AVC lines produced it.
 
 The generator is not a reviewer. `VERDICT_NEEDS_REVIEW` means the tuple is legitimate but the allow weakens the domain (`execmem`, `dac_override`, or a foreign `process` transition). It is recorded in `findings.json` and listed in `pr_summary.md` as a security decision, not a labeling miss. It is not written to the `.te` unless you pass `--allow-needs-review`. `--allow-needs-review-perm <perm>` is the narrower form, and it admits only the named permissions. Either way the switch is the developer saying: "this AVC proved the rule. I accept the weakening."
@@ -178,10 +169,10 @@ make deps
 
 # 1. Classify the fixture. --explain prints and writes no files.
 python3 cli/deterministic_gen.py --explain \
-  --avc-log docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
+  --avc-log tests/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
   --manifest config/myapp.manifest.yml \
-  --existing-te selinux/myapp.te \
-  --existing-fc selinux/myapp.fc
+  --existing-te selinux/myapp/myapp.te \
+  --existing-fc selinux/myapp/myapp.fc
 ```
 
 ```text
@@ -201,10 +192,10 @@ Drop `--explain` to write the artifacts, and assemble a PR body without a SELinu
 ```bash
 # 2. Write the artifacts into /tmp (no repo state touched).
 python3 cli/deterministic_gen.py \
-  --avc-log docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
+  --avc-log tests/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
   --manifest config/myapp.manifest.yml \
-  --existing-te selinux/myapp.te \
-  --existing-fc selinux/myapp.fc \
+  --existing-te selinux/myapp/myapp.te \
+  --existing-fc selinux/myapp/myapp.fc \
   --out-dir /tmp/myapp-out
 # → /tmp/myapp-out/{findings.json,myapp.te,myapp.fc,pr_summary.md}, exit 0
 
@@ -212,7 +203,7 @@ python3 cli/deterministic_gen.py \
 bash scripts/assemble_pr_body.sh \
   --app-name myapp \
   --pr-summary /tmp/myapp-out/pr_summary.md \
-  --avc-log docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
+  --avc-log tests/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
   --output /tmp/myapp-out/pr_body.md \
   --skip-policy-diff \
   --staging-host "laptop (no SELinux)" \

@@ -13,9 +13,9 @@ git numbers.
 
 Run [Count it yourself](#count-it-yourself) to repeat every number above.
 
-## AI help
+## Agent help
 
-Both sides wrote this code with an AI coding agent. The tree records that fact in two different
+Both sides wrote this code with a coding agent. The tree records that fact in two different
 ways.
 
 | Fact | Effect |

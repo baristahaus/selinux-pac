@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 #
 # vendor_policy_check.sh — Refuse to generate a module that duplicates
-# vendor or base policy (JWS/Tomcat, EAP/JBoss, httpd, named, postgresql).
+# vendor or base policy. RHEL 9 base module names (c9s): apache, bind.
+# There is no policy/modules/contrib/jboss.te on c9s. EAP ships its own package.
 #
 # JWS and EAP ship SELinux in a separate RPM that is not installed by default
 # (jws6-tomcat-selinux, eap7-selinux / eap8-selinux). Until that RPM is
-# installed the process runs unconfined_java_t — "no module loaded" does not
-# mean "no policy exists".
+# installed the process runs unconfined_service_t — "no module loaded" does not
+# mean "no policy exists". unconfined_java_t is not declared on RHEL 9.
+# Distro Tomcat is tomcat_t and unconfined.
 #
 # Source from other scripts:
 #   source "${SCRIPT_DIR}/lib/vendor_policy_check.sh"
@@ -81,9 +83,12 @@ vendor_pkgs_for_class() {
 vendor_module_grep_for_class() {
     case "$1" in
         tomcat) echo '^(tomcat|jws[0-9]*_tomcat|jws[0-9]+)$' ;;
+        # jboss is not a base-policy module. Keep the name for an EAP package that loads one.
         eap) echo '^(jboss|eap[0-9]+|eap|wildfly)$' ;;
-        httpd) echo '^httpd$' ;;
-        named) echo '^named$' ;;
+        # policy_module(apache) in policy/modules/contrib/apache.te; the domain is httpd_t.
+        httpd) echo '^apache$' ;;
+        # policy_module(bind) in policy/modules/contrib/bind.te; the domain is named_t.
+        named) echo '^bind$' ;;
         postgresql) echo '^(postgresql|postgres)$' ;;
         python) echo '^(python|python3)$' ;;
         *) echo '^$' ;;
@@ -247,8 +252,8 @@ _vpc_domain() {
     case "${module}" in
         jws6_tomcat) echo jws6_tomcat_t; return ;;
         tomcat) echo tomcat_t; return ;;
-        httpd) echo httpd_t; return ;;
-        named) echo named_t; return ;;
+        httpd|apache) echo httpd_t; return ;;
+        named|bind) echo named_t; return ;;
         postgresql) echo postgresql_t; return ;;
         jboss|eap7|eap8) echo jboss_t; return ;;
     esac
@@ -284,23 +289,41 @@ _vpc_fc_type() {
 
 _vpc_port_type() {
     local class="$1"
+    local manifest="${2:-}"
+    if [[ -n "${manifest}" && -f "${manifest}" ]]; then
+        local mpt
+        mpt="$(python3 -c "
+import yaml, sys
+m = yaml.safe_load(open(sys.argv[1]))
+ports = m.get('selinux_ports') or []
+types = sorted(set(p['type'] for p in ports if p.get('type')))
+print(','.join(types) if types else '')
+" "${manifest}" 2>/dev/null || true)"
+        if [[ -n "${mpt}" ]]; then
+            echo "${mpt}"
+            return 0
+        fi
+    fi
     case "${class}" in
         postgresql) echo postgresql_port_t ;;
         named) echo dns_port_t ;;
-        *) echo http_port_t ;;
+        *) echo "" ;;
     esac
 }
 
 _vpc_emit_triage() {
-    local situation="$1" app="$2" module="$3" pkg="$4" cls="$5" action="$6" domain="${7:-}"
+    local situation="$1" app="$2" module="$3" pkg="$4" cls="$5" action="$6" domain="${7:-}" manifest="${8:-}"
     local fc_type port_type confined
     if [[ -z "${domain}" ]]; then
         domain="$(_vpc_domain "${cls}" "${module}")"
     fi
     fc_type="$(_vpc_fc_type "${domain}")"
-    port_type="$(_vpc_port_type "${cls}")"
+    port_type="$(_vpc_port_type "${cls}" "${manifest}")"
     confined="$(vendor_domain_confined_flag "${domain}")"
-    _vpc_info "TRIAGE situation=${situation} app=${app} module=${module} package=${pkg} class=${cls} action=${action} domain=${domain} fc_type=${fc_type} port_type=${port_type} domain_confined=${confined}"
+    local triage_line="TRIAGE situation=${situation} app=${app} module=${module} package=${pkg} class=${cls} action=${action} domain=${domain} fc_type=${fc_type}"
+    [[ -n "${port_type}" ]] && triage_line+=" port_type=${port_type}"
+    triage_line+=" domain_confined=${confined}"
+    _vpc_info "${triage_line}"
     if [[ "${confined}" == "no" ]]; then
         _vpc_warn "domain ${domain} is files_unconfined_type / unconfined_domain_type — a loaded vendor module does not mean file or port denials will fire"
     fi
@@ -340,12 +363,21 @@ _vpc_refuse_loaded() {
     return 1
 }
 
+_vpc_refuse_loaded_unconfined() {
+    local module="$1"
+    local domain="$2"
+    _vpc_error "vendor module '${module}' is loaded, but ${domain} is unconfined (situation=loaded_unconfined, action=confine)."
+    _vpc_error "Next step: install the vendor's confining package, or generate with --force \"reason\"."
+    _vpc_error "Do not tune file or port denials this domain will not produce."
+    return 1
+}
+
 _vpc_refuse_package() {
     local pkg="$1"
     local detail="$2"
     _vpc_error "vendor SELinux package ${detail}: ${pkg}"
     _vpc_error "Install or enable the vendor package; do not generate a duplicate module."
-    _vpc_error "Until that RPM is installed, Tomcat/EAP often runs as unconfined_java_t — that is not confinement."
+    _vpc_error "Until that RPM is installed, Tomcat/EAP on RHEL 9 runs as unconfined_service_t — that is not confinement. Distro Tomcat is tomcat_t and unconfined."
     _vpc_error "Escape hatch: re-run with --force \"reason\" if this app genuinely differs from the vendor policy."
     return 1
 }
@@ -428,9 +460,15 @@ vendor_policy_preflight() {
         loaded="$(vendor_match_loaded_modules "${class}" "${listing}")"
         if [[ -n "${loaded}" ]]; then
             loaded="$(printf '%s\n' "${loaded}" | head -n 1)"
-            situation="loaded"
-            action="tune"
             module="${loaded}"
+            domain="$(_vpc_domain "${class}" "${module}")"
+            if [[ "$(vendor_domain_confined_flag "${domain}")" == "no" ]]; then
+                situation="loaded_unconfined"
+                action="confine"
+            else
+                situation="loaded"
+                action="tune"
+            fi
         else
             rpm_qa="$(vendor_check_rpm_qa)"
             while IFS= read -r pkg; do
@@ -488,7 +526,9 @@ vendor_policy_preflight() {
         fi
     fi
 
-    _vpc_emit_triage "${situation}" "${app_name}" "${module}" "${package}" "${class}" "${action}" "${domain}"
+    local _vpc_manifest="${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/config/${app_name}.manifest.yml"
+    [[ -f "${_vpc_manifest}" ]] || _vpc_manifest=""
+    _vpc_emit_triage "${situation}" "${app_name}" "${module}" "${package}" "${class}" "${action}" "${domain}" "${_vpc_manifest}"
 
     if [[ "${force}" -eq 1 ]]; then
         if [[ "${situation}" == "none" || "${situation}" == "skipped" ]]; then
@@ -512,6 +552,10 @@ vendor_policy_preflight() {
             ;;
         loaded)
             _vpc_refuse_loaded "${module}" "${class}"
+            return 1
+            ;;
+        loaded_unconfined)
+            _vpc_refuse_loaded_unconfined "${module}" "${domain}"
             return 1
             ;;
         package_installed)

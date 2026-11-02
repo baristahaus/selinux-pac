@@ -29,11 +29,25 @@ if ! compgen -G "${DIST}/*.rpm" >/dev/null; then
     exit 1
 fi
 
-if [[ -n "${SELINUX_GPG_NAME:-}" ]] && command -v rpmsign >/dev/null 2>&1; then
-    echo "Signing RPMs with GPG name ${SELINUX_GPG_NAME}"
-    rpmsign --addsign --key-id "${SELINUX_GPG_NAME}" "${DIST}"/*.rpm
+if [[ "${SELINUX_ALLOW_UNSIGNED:-}" == "1" ]]; then
+    echo "WARNING: SELINUX_ALLOW_UNSIGNED=1 — publishing UNSIGNED RPMs." >&2
+    echo "WARNING: labs only. Do not point a production host at this repository." >&2
+elif [[ -z "${SELINUX_GPG_NAME:-}" ]] || ! command -v rpmsign >/dev/null 2>&1; then
+    echo "Refusing to publish: RPM signing is not configured." >&2
+    echo "Set SELINUX_GPG_NAME and install rpm-sign, or set SELINUX_ALLOW_UNSIGNED=1 for a lab only." >&2
+    exit 1
 else
-    echo "WARN: rpmsign skipped (install rpm-sign and set SELINUX_GPG_NAME)" >&2
+    echo "Signing RPMs with GPG name ${SELINUX_GPG_NAME}"
+    sign_args=(--addsign)
+    if [[ -n "${LAB_GNUPGHOME:-}" ]]; then
+        sign_args+=(--define "_gpg_path ${LAB_GNUPGHOME}")
+    fi
+    sign_args+=(--define "_gpg_name ${SELINUX_GPG_NAME}")
+    # RHEL 9 rpm dropped --key-id. Older rpm still accepts it.
+    if rpmsign --help 2>&1 | grep -q -- '--key-id'; then
+        sign_args+=(--key-id "${SELINUX_GPG_NAME}")
+    fi
+    rpmsign "${sign_args[@]}" "${DIST}"/*.rpm
 fi
 
 sudo mkdir -p "${REPO_DIR}"

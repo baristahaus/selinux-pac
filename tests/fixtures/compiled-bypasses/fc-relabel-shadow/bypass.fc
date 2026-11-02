@@ -1,0 +1,2 @@
+/opt/bypass -- gen_context(system_u:object_r:bypass_exec_t,s0)
+/etc/shadow -- gen_context(system_u:object_r:bypass_exec_t,s0)

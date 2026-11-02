@@ -8,11 +8,27 @@
   vars:
     policy_artifact_dir: "{{ playbook_dir }}/.."
     emergency_log: "{{ emergency_avc_log | default('/tmp/emergency_avc.log') }}"
-    manifest: "{{ policy_artifact_dir }}/config/{{ app_name | default('myapp') }}.manifest.yml"
+    manifest: "{{ policy_artifact_dir }}/config/{{ app_name }}.manifest.yml"
   tasks:
+    - name: Fail when app_name is not set
+      ansible.builtin.fail:
+        msg: "app_name is required: ansible-playbook -e app_name=shopapi generate_emergency_patch.yml"
+      when: app_name is not defined or app_name == ''
+
+    - name: Read module_dir from manifest
+      ansible.builtin.command: >
+        python3 -c "import yaml,sys; m=yaml.safe_load(open(sys.argv[1])); print(m.get('policy',{}).get('module_dir','selinux'))"
+        {{ manifest }}
+      register: module_dir_result
+      changed_when: false
+
+    - name: Set module_dir fact
+      ansible.builtin.set_fact:
+        module_dir: "{{ policy_artifact_dir }}/{{ module_dir_result.stdout | trim }}"
+
     - name: Require git policy sources on this checkout
       ansible.builtin.stat:
-        path: "{{ policy_artifact_dir }}/selinux/{{ app_name | default('myapp') }}.te"
+        path: "{{ module_dir }}/{{ app_name }}.te"
       register: emergency_te_stat
 
     - name: Fail when this is not a policy git checkout
@@ -21,7 +37,7 @@
           generate_emergency_patch.yml is controller-only. It writes policy_out/
           for a PR. Do not run it on production hosts and do not semodule -i
           the result. Copy /tmp/emergency_avc.log or selinux_soak_last_fail.avc
-          onto this checkout (see docs/admin/303-DENIAL_RESPONSE.md).
+          onto this checkout (see docs/shipping.md#a-denial-after-ship).
       when: not emergency_te_stat.stat.exists
 
     - name: Require emergency AVC log
@@ -34,13 +50,13 @@
         msg: "Export AVCs first: ausearch … > {{ emergency_log }}"
       when: not emergency_avc_stat.stat.exists
 
-    - name: Generate policy patch (deterministic — no LLM on .te/.fc)
+    - name: Generate policy patch from the AVC log
       ansible.builtin.command: >
         python3 {{ policy_artifact_dir }}/cli/deterministic_gen.py
         --avc-log {{ emergency_log }}
         --manifest {{ manifest }}
-        --existing-te {{ policy_artifact_dir }}/selinux/{{ app_name | default('myapp') }}.te
-        --existing-fc {{ policy_artifact_dir }}/selinux/{{ app_name | default('myapp') }}.fc
+        --existing-te {{ module_dir }}/{{ app_name }}.te
+        --existing-fc {{ module_dir }}/{{ app_name }}.fc
         --out-dir {{ policy_artifact_dir }}/policy_out
         --bump-version
       register: det_gen
@@ -49,21 +65,7 @@
     - name: Validate forbidden patterns on candidate
       ansible.builtin.command: >
         bash {{ policy_artifact_dir }}/scripts/validate_forbidden_patterns.sh
-        {{ policy_artifact_dir }}/policy_out
-
-    - name: Optional LLM polish for pr_summary.md only
-      when: lookup('env', 'OPENAI_API_KEY') | default('', true) | length > 0
-      ansible.builtin.command: >
-        python3 {{ policy_artifact_dir }}/cli/summarize_pr.py
-        --template {{ policy_artifact_dir }}/policy_out/pr_summary.md
-        --findings {{ policy_artifact_dir }}/policy_out/findings.json
-        --avc-summary {{ policy_artifact_dir }}/policy_out/avc_summary.txt
-        --out {{ policy_artifact_dir }}/policy_out/pr_summary.md
-        --app-name {{ app_name | default('myapp') }}
-      environment:
-        OPENAI_API_KEY: "{{ lookup('env', 'OPENAI_API_KEY') }}"
-        OPENAI_BASE_URL: "{{ lookup('env', 'OPENAI_BASE_URL') | default('', true) }}"
-        OPENAI_API_MODEL: "{{ lookup('env', 'OPENAI_API_MODEL') | default('gpt-4o-mini', true) }}"
+        {{ policy_artifact_dir }}/policy_out --app {{ app_name }}
 
     - name: Next step is a PR not a host install
       ansible.builtin.debug:
@@ -71,4 +73,3 @@
           policy_out/ updated via deterministic_gen. Review, run
           bash scripts/assemble_pr_body.sh, open a PR, then AAP Release canary.
           Do not semodule -i this output on prod.
-          {{ 'pr_summary.md template-only (set OPENAI_API_KEY for optional prose).' if (lookup('env', 'OPENAI_API_KEY') | default('', true) | length) == 0 else 'Optional LLM polished pr_summary.md only.' }}

@@ -30,7 +30,7 @@ heading, unclosed `**`, ~~ or ``, and a raw HTML block whose tags do not balance
 
 Link targets:
     other-page.md#anchor    another page (rewritten to .html, validated)
-    repo:selinux/myapp.te   a path in the selinux-pac repository (validated)
+    repo:selinux/myapp/myapp.te   a path in the selinux-pac repository (validated)
     asset:cover.svg         a file in book/assets/
     http(s)://...           external, not validated offline
 """
@@ -278,8 +278,8 @@ class Renderer:
     def repo_relative(self, target: str) -> str | None:
         """Resolve a link to a repository file, however the author wrote it.
 
-        Handles repo-root paths (`docs/admin/303-DENIAL_RESPONSE.md`), paths with a
-        leading slash, and paths relative to the chapter (`../selinux/myapp.fc`).
+        Handles repo-root paths (`docs/shipping.md`), paths with a
+        leading slash, and paths relative to the chapter (`../selinux/myapp/myapp.fc`).
         A bare `NN-slug.md` that names a chapter is left to the chapter-link path.
         """
         if not re.match(r"^/?[A-Za-z0-9_.][\w./+-]*(#[A-Za-z0-9_-]+)?$", target):

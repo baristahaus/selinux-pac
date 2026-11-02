@@ -2,7 +2,7 @@
 
 > Each verdict the generator knows is pinned to a golden file. If a verdict drifts,
 > `make test-fixtures` fails. Every row on this page is a real directory under
-> `docs/examples/fixtures/deterministic/`, read from the `expected.json` each case ships.
+> `tests/fixtures/deterministic/`, read from the `expected.json` each case ships.
 
 ## The 13 deterministic cases
 
@@ -13,7 +13,7 @@ decision the verdict rewards.
 | Directory | Verdict | What the AVC asked | Correct response | Chapter teaches it |
 |---|---|---|---|---|
 | `01-mislabeled-var-lib` | `fc_drift` | `write` on `/var/lib/myapp/data.log`, target type `var_lib_t` | `restorecon`: the path is already covered by `/var/lib/myapp(/.*)?` | [File Contexts and the Label Lifecycle](repo:book/part2/09-file-contexts-and-the-label-lifecycle.md) |
-| `02-port-bind` | `private_port` | `name_bind` on port 8888, target type `unreserved_port_t` | Add the port to the manifest's `selinux_ports`. The golden output says `add to manifest selinux_ports, do not semanage port -a on prod`. The canary's `seport` step registers it | [Ports, Booleans and Transitions](repo:book/part2/10-ports-booleans-and-transitions.md) |
+| `02-port-bind` | `private_port` | `name_bind` on port 8888, target type `unreserved_port_t` | Add the port to the manifest's `selinux_ports`. The golden output says `add to manifest selinux_ports, do not semanage port -a on prod`. The canary's `semanage port -a` step registers it | [Ports, Booleans and Transitions](repo:book/part2/10-ports-booleans-and-transitions.md) |
 | `03-shadow-read` | `forbidden` | `read open` on `shadow`, target type `shadow_t` | refuse: exit 1, never emit the rule | [When Policy Says No](repo:book/part2/12-when-policy-says-no.md) |
 | `04-boolean-network-connect` | `boolean` | `name_connect` to `http_port_t` | consult `sesearch` (or the boolean mock), then set `httpd_can_network_connect` | [When Policy Says No](repo:book/part2/12-when-policy-says-no.md) |
 | `05-baseline-covered` | `baseline` | `read open getattr` on `random_device_t` | no allow: the `dev_read_urand` macro covers the tuple | [When Policy Says No](repo:book/part2/12-when-policy-says-no.md) |
@@ -99,17 +99,17 @@ category of question the book asks about.
 
 | Family | What it pins | Where it is documented |
 |---|---|---|
-| **`payments` checks** | `cli/deterministic_gen.py` must not emit `myapp` artifacts for the `payments` manifest | `scripts/run_deterministic_payments_check.sh` and `config/payments.manifest.example.yml` |
-| **blast radius** | `scripts/classify_policy_blast_radius.sh` classifies candidate policy deltas against base policy | `tests/fixtures/blast_radius/` and `scripts/run_blast_radius_fixtures.sh` |
-| **`tune_report`** | `--tune-report` generates only host commands (no `.te`). It classifies vendor-domain denials | `docs/examples/fixtures/tune_report/` and `scripts/run_tune_report_fixtures.sh` |
-| **`skip_ai`** | Offline demo fixture: `baseline/` is the "before" state, `generated/` is the "after" state, and `avc.log` is the recorded audit | `docs/examples/fixtures/skip_ai/README.md` and `scripts/refresh_skip_ai_fixture.sh` |
-| **`policy_diff`** | The `### Policy access delta` block that `scripts/assemble_pr_body.sh` splices into the PR body: added and removed allow lines, as text | `docs/examples/fixtures/policy_diff/sample_delta.md` and the `assemble_pr_body_policy_diff_section` test in `scripts/smoke_test.py` |
-| **smoke tests** | At least one golden fixture row for every classification verdict, every branch test in `classify_policy_blast_radius.sh`, and the boolean, FC, vendor, and soak gates | `scripts/smoke_test.py` |
+| **`payments` checks** | `cli/deterministic_gen.py` must not emit `myapp` artifacts for the `payments` manifest | `tests/run_deterministic_payments_check.sh` and `config/payments.manifest.example.yml` |
+| **blast radius** | `scripts/classify_policy_blast_radius.sh` classifies candidate policy deltas against base policy | `tests/fixtures/blast_radius/` and `tests/run_blast_radius_fixtures.sh` |
+| **`tune_report`** | `--tune-report` generates only host commands (no `.te`). It classifies vendor-domain denials | `tests/fixtures/tune_report/` and `tests/run_tune_report_fixtures.sh` |
+| **`offline`** | Offline demo fixture: `baseline/` is the "before" state, `generated/` is the "after" state, and `avc.log` is the recorded audit | `tests/fixtures/offline/README.md` and `tests/refresh_offline_fixture.sh` |
+| **`policy_diff`** | The `### Policy access delta` block that `scripts/assemble_pr_body.sh` splices into the PR body: added and removed allow lines, as text | `tests/fixtures/policy_diff/sample_delta.md` and the `assemble_pr_body_policy_diff_section` test in `tests/smoke_test.py` |
+| **smoke tests** | At least one golden fixture row for every classification verdict, every branch test in `classify_policy_blast_radius.sh`, and the boolean, FC, vendor, and soak gates | `tests/smoke_test.py` |
 
 :::: note each family answers one question
 `deterministic` pins classification verdicts. `payments` pins manifest boundaries.
 `blast_radius` pins allow-rule deltas. `tune_report` pins the boundary of *no policy module*.
-`skip_ai` pins the demo path. `smoke_test.py` pins every test in the repository.
+`offline` pins the demo path. `smoke_test.py` pins every test in the repository.
 Each one can run the same fixture independently of the others.
 ::::
 
@@ -117,9 +117,9 @@ Each one can run the same fixture independently of the others.
 
 - Pick one verdict (`fc_drift`, `baseline`, `forbidden`, `boolean`, `needs_review`, or
   `interface`) and run `make test-fixtures` to watch it pin its own answer.
-- Look at `docs/examples/fixtures/deterministic/01-mislabeled-var-lib/` and read the
+- Look at `tests/fixtures/deterministic/01-mislabeled-var-lib/` and read the
   `avc.log` line verbatim. Every fixture directory is this readable.
 - Find the family that answers the question you are asking: `tune_report` for vendor
-  domains, `blast_radius` for policy deltas, `skip_ai` for the end-to-end demo.
+  domains, `blast_radius` for policy deltas, `offline` for the end-to-end demo.
 - When you add a new verdict, add a new fixture. The same check that fails the PR today
   fails the PR tomorrow.

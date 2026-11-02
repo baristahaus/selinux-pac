@@ -22,7 +22,7 @@ call it `myapp_var_lib_t`.
 ## The `.fc` format — one regex per line
 
 Each line is a regex anchored to the whole path, followed by a call to
-`gen_context(...)`. The file in the repo, [`selinux/myapp.fc`](../../selinux/myapp.fc),
+`gen_context(...)`. The file in the repo, [`selinux/myapp/myapp.fc`](../../selinux/myapp/myapp.fc),
 is the worked example:
 
 ```text
@@ -56,7 +56,7 @@ anything else is uncommon. So the line only varies on the type and the level
 
 ## Why there are two copies of `/opt/myapp`
 
-[`selinux/myapp.fc`](../../selinux/myapp.fc) lists every path twice:
+[`selinux/myapp/myapp.fc`](../../selinux/myapp/myapp.fc) lists every path twice:
 
 ```text
 /opt/myapp/app\.py                          gen_context(...)
@@ -221,7 +221,7 @@ right label, and the old ones inherit the policy on the same run.
 
 ## Worked examples — the golden fixtures
 
-Two AVCs in [`docs/examples/fixtures/deterministic/`](../../docs/examples/fixtures/deterministic/)
+Two AVCs in [`tests/fixtures/deterministic/`](../../tests/fixtures/deterministic/)
 pin the rule. Each directory carries its own `avc.log` and `expected.json`.
 The verdicts there are the answers the generator produces for the same input.
 
@@ -249,7 +249,7 @@ still `var_lib_t`. The generator's verdict is
 ]
 ```
 
-quoted exactly from [`expected.json`](../../docs/examples/fixtures/deterministic/01-mislabeled-var-lib/expected.json).
+quoted exactly from [`expected.json`](../../tests/fixtures/deterministic/01-mislabeled-var-lib/expected.json).
 The generator's action line is the whole fix: *`/var/lib/myapp/data.log` is `myapp_var_lib_t` per the `.fc`, but it is labeled `var_lib_t` on disk. No policy change is needed. Run `restorecon -Rv /var/lib/myapp/data.log`.* A new `.fc` line is redundant.
 
 **Case `06-fc-missing-line`**: no `.fc` line matches the path.
@@ -263,7 +263,7 @@ avc: denied { write } for pid=1234 comm="python3" name="data"
 ```
 
 The path is `/opt/myapp/cache/data`, under the manifest's `install_root` of `/opt/myapp`.
-`selinux/myapp.fc` names the root itself and several files inside it, but no line matches a new
+`selinux/myapp/myapp.fc` names the root itself and several files inside it, but no line matches a new
 subdirectory, so the file took the type its parent directory carried, `var_lib_t`. The verdict is
 
 ```json
@@ -275,7 +275,7 @@ subdirectory, so the file took the type its parent directory carried, `var_lib_t
 ]
 ```
 
-quoted exactly from [`expected.json`](../../docs/examples/fixtures/deterministic/06-fc-missing-line/expected.json).
+quoted exactly from [`expected.json`](../../tests/fixtures/deterministic/06-fc-missing-line/expected.json).
 The suggested line is the observed path, typed from the install root, and `restorecon` applies it:
 
 ```text
@@ -298,8 +298,8 @@ $ matchpathcon /var/lib/myapp/data.log
 $ sudo restorecon -Rv -n /opt/myapp /var/lib/myapp /var/log/myapp
 
 # on your laptop: read each fixture and match its verdict
-$ cat docs/examples/fixtures/deterministic/01-mislabeled-var-lib/expected.json
-$ cat docs/examples/fixtures/deterministic/06-fc-missing-line/expected.json
+$ cat tests/fixtures/deterministic/01-mislabeled-var-lib/expected.json
+$ cat tests/fixtures/deterministic/06-fc-missing-line/expected.json
 ```
 
 The dry run is a read: `-n` prints the changes a real run makes and writes nothing. It must show no

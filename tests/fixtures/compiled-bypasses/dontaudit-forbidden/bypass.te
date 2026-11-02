@@ -1,0 +1,14 @@
+policy_module(bypass, 1.0.0)
+
+require {
+	type shadow_t;
+	class file read;
+}
+
+type bypass_t;
+type bypass_exec_t;
+
+domain_type(bypass_t)
+files_type(bypass_exec_t)
+
+dontaudit bypass_t shadow_t:file read;

@@ -1,35 +1,63 @@
-# Policy best-practices on every PR that touches selinux/.
-# The deterministic generator already ran validate_forbidden_patterns.sh, so
-# these jobs are expected to pass. They are a review gate, not a fail-on-purpose
-# demo step. Compile stays on rhel-qa (selinux-policy-devel).
+# Source grep is a fast check. The security boundary is the Stream 9 job,
+# which compiles myapp, shopapi, and payments and searches the module.
+# It also compiles each review-bypass fixture and fails if any is accepted.
 name: SELinux Policy CI
 
 on:
   pull_request:
-    paths:
-      - 'selinux/**'
-      - 'scripts/validate_forbidden_patterns.sh'
-      - 'scripts/validate_version_consistency.sh'
-      - '.github/workflows/selinux-policy-ci.yml'
   push:
     branches:
       - main
-    paths:
-      - 'selinux/**'
-      - 'scripts/validate_forbidden_patterns.sh'
-      - 'scripts/validate_version_consistency.sh'
-      - '.github/workflows/selinux-policy-ci.yml'
 
 jobs:
+  offline-tests:
+    name: offline-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Python venv support
+        run: sudo apt-get update && sudo apt-get install -y python3-venv
+      - name: Run the offline suite
+        run: make test
+
   forbidden-patterns:
     name: forbidden-patterns
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install PyYAML (manifest exceptions and the source audit)
+        run: pip install pyyaml
       - name: Validate forbidden SELinux patterns
         run: |
-          bash scripts/validate_forbidden_patterns.sh selinux
-          POLICY_MODULE=shopapi SELINUX_DOMAIN=shopapi_t bash scripts/validate_forbidden_patterns.sh selinux/shopapi
+          bash scripts/validate_forbidden_patterns.sh selinux --app myapp
+          bash scripts/validate_forbidden_patterns.sh selinux/shopapi --app shopapi
+          bash scripts/validate_forbidden_patterns.sh selinux/payments --app payments
+      - name: Audit dontaudit rules and file-context paths
+        run: python3 cli/policy_audit.py --selinux-dir selinux
+
+  compiled-policy:
+    name: compiled-policy
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
+    container: ${{ vars.RUNNER != 'rhel9-utm' && 'quay.io/centos/centos:stream9' || fromJSON('null') }}
+    steps:
+      - name: Ensure sudo
+        run: command -v sudo >/dev/null 2>&1 || dnf install -y sudo
+      - name: Install git for checkout
+        run: sudo dnf install -y git
+      - uses: actions/checkout@v4
+      - name: Install policy toolchain
+        run: sudo dnf install -y selinux-policy-devel selinux-policy-targeted setools-console python3 python3-pyyaml audit
+      - name: Compiled policy semantics
+        run: |
+          sudo bash scripts/validate_policy_semantics.sh selinux --app myapp
+          sudo bash scripts/validate_policy_semantics.sh selinux/shopapi --app shopapi
+          sudo bash scripts/validate_policy_semantics.sh selinux/payments --app payments
+      - name: Reject compiled review bypasses
+        run: sudo bash scripts/reject_compiled_bypasses.sh
+      - name: AVC epoch window sees denials after the marker
+        env:
+          AVC_REQUIRE_AUSEARCH: "1"
+        run: bash tests/test_avc_epoch_window.sh
 
   version-consistency:
     name: version-consistency

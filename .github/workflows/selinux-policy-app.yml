@@ -1,0 +1,99 @@
+# Called by an app repo. The caller owns the github context, so this file
+# is workflow_call only and takes the tools repo and ref as inputs.
+# Copying it into the app repo does not work: the validators live in the
+# tools checkout, not next to the app.
+name: SELinux policy app
+
+on:
+  workflow_call:
+    inputs:
+      policy_dir:
+        description: Directory in the calling repo that contains MODULE.te
+        type: string
+        required: true
+      module:
+        description: Policy module name (the .te stem)
+        type: string
+        required: true
+      domain:
+        description: Process domain for that module (shopapi_t)
+        type: string
+        required: true
+      manifest:
+        description: App manifest in the calling repo. Its selinux_exceptions are the only way to accept bin_t execute
+        type: string
+        required: false
+        default: ""
+      tools_repo:
+        description: Repository that contains the validators
+        type: string
+        required: false
+        default: anurag-saran/selinux-pac
+      tools_ref:
+        description: Commit, branch, or tag of the tools repository
+        type: string
+        required: false
+        default: main
+
+jobs:
+  app-forbidden-patterns:
+    name: app-forbidden-patterns
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.tools_repo }}
+          ref: ${{ inputs.tools_ref }}
+          path: tools
+      - name: Install PyYAML (manifest exceptions and the source audit)
+        run: pip install pyyaml
+      - name: Forbidden patterns, source audit, and version
+        env:
+          POLICY_DIR: ${{ inputs.policy_dir }}
+          MODULE: ${{ inputs.module }}
+          DOMAIN: ${{ inputs.domain }}
+          MANIFEST: ${{ inputs.manifest }}
+        run: |
+          set -euo pipefail
+          src="${GITHUB_WORKSPACE}/app/${POLICY_DIR}"
+          [[ -d "${src}" ]]
+          [[ -n "${MODULE}" ]]
+          manifest="${GITHUB_WORKSPACE}/app/${MANIFEST:-config/${MODULE}.manifest.yml}"
+          bash "${GITHUB_WORKSPACE}/tools/scripts/validate_forbidden_patterns.sh" "${src}" --app "${MODULE}"
+          PYTHONPATH="${GITHUB_WORKSPACE}/tools/cli" \
+            python3 "${GITHUB_WORKSPACE}/tools/cli/policy_audit.py" --selinux-dir "${src}"
+          SELINUX_ROOT="${src}" \
+            bash "${GITHUB_WORKSPACE}/tools/scripts/validate_version_consistency.sh"
+
+  app-compiled-policy:
+    name: app-compiled-policy
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
+    container: ${{ vars.RUNNER != 'rhel9-utm' && 'quay.io/centos/centos:stream9' || fromJSON('null') }}
+    steps:
+      - name: Ensure sudo
+        run: command -v sudo >/dev/null 2>&1 || dnf install -y sudo
+      - name: Install git for checkout
+        run: sudo dnf install -y git
+      - uses: actions/checkout@v4
+        with:
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.tools_repo }}
+          ref: ${{ inputs.tools_ref }}
+          path: tools
+      - name: Install policy toolchain
+        run: sudo dnf install -y selinux-policy-devel selinux-policy-targeted setools-console python3 python3-pyyaml
+      - name: Compiled policy semantics
+        env:
+          POLICY_DIR: ${{ inputs.policy_dir }}
+          MODULE: ${{ inputs.module }}
+          DOMAIN: ${{ inputs.domain }}
+          MANIFEST: ${{ inputs.manifest }}
+        run: |
+          set -euo pipefail
+          src="${GITHUB_WORKSPACE}/app/${POLICY_DIR}"
+          sudo bash "${GITHUB_WORKSPACE}/tools/scripts/validate_policy_semantics.sh" "${src}" --app "${MODULE}"

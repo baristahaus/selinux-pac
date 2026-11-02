@@ -1,5 +1,5 @@
 Name:           myapp-selinux
-# modver is passed by packaging/build_rpms.sh from selinux/policy_version.txt (single source of truth).
+# modver is passed by packaging/build_rpms.sh from selinux/myapp/policy_version.txt (single source of truth).
 Version:        %{modver}
 Release:        1%{?dist}
 Summary:        SELinux policy module for Order Processor reference application

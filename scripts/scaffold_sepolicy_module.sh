@@ -66,4 +66,4 @@ if [[ ! -f "${OUT_DIR}/${MODULE}.te" ]]; then
 fi
 
 echo "[INFO] Review ${OUT_DIR}/${MODULE}.{te,if,fc} then compile:" >&2
-echo "  POLICY_MODULE=${MODULE} SELINUX_DOMAIN=${DOMAIN} bash scripts/compile_and_validate.sh ${OUT_DIR}" >&2
+echo "  bash scripts/compile_and_validate.sh ${OUT_DIR} --app ${MODULE}" >&2

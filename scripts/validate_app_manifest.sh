@@ -5,6 +5,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MANIFEST="${1:-${APP_MANIFEST:-${SCRIPT_DIR}/../config/myapp.manifest.yml}}"
+MANIFEST="${1:?Usage: validate_app_manifest.sh MANIFEST_PATH}"
 
 python3 "${SCRIPT_DIR}/lib/app_manifest.py" validate "${MANIFEST}"

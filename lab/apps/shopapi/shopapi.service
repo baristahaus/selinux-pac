@@ -1,0 +1,24 @@
+[Unit]
+Description=shopapi Spring Boot (SELinux PaC demo — no vendor policy)
+After=network.target auditd.service
+Wants=auditd.service
+
+[Service]
+Type=simple
+User=shopapi
+Group=shopapi
+EnvironmentFile=-/etc/shopapi.env
+WorkingDirectory=/opt/shopapi
+# Wrapper /opt/shopapi/bin/shopapi is shopapi_exec_t and execs /usr/bin/java.
+# init_daemon_domain(shopapi_t, shopapi_exec_t) transitions from init_t.
+# No SELinuxContext=. The java process type is shopapi_t.
+ExecStart=/opt/shopapi/bin/shopapi -jar /opt/shopapi/shopapi.jar
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=false
+StateDirectory=shopapi
+LogsDirectory=shopapi
+RuntimeDirectory=shopapi
+
+[Install]
+WantedBy=multi-user.target

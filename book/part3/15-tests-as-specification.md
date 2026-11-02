@@ -40,7 +40,7 @@ The fixture is the reviewable data.
 A real fixture directory looks like this:
 
 ```text
-docs/examples/fixtures/deterministic/01-mislabeled-var-lib/
+tests/fixtures/deterministic/01-mislabeled-var-lib/
 ├── avc.log
 ├── expected.json
 ```
@@ -106,9 +106,9 @@ The top-level `Makefile` is the single entry point for all verification. The tar
 
 | Target | What it runs |
 |--------|--------------|
-| `make test-fixtures` | `scripts/run_deterministic_fixtures.sh` + `run_deterministic_payments_check.sh` + `run_blast_radius_fixtures.sh` + `run_tune_report_fixtures.sh` |
+| `make test-fixtures` | `tests/run_deterministic_fixtures.sh` + `run_deterministic_payments_check.sh` + `run_blast_radius_fixtures.sh` + `run_tune_report_fixtures.sh` |
 | `make test-static` | `make test-forbidden` + `test-version` + `test-rpm` + `test-manifest`: shell validators that grep `selinux/` |
-| `make test-smoke` | `scripts/smoke_test.py`: the Python test suite. §2 of the testing doc describes its place in the pipeline, and the file itself is the full list |
+| `make test-smoke` | `tests/smoke_test.py`: the Python test suite. §2 of the testing doc describes its place in the pipeline, and the file itself is the full list |
 | `make test` | `deps test-fixtures test-static test-smoke`: offline health check, no SELinux host required |
 | `make check` | `test lint book-check`: full repo health, offline tests, linters, book links |
 | `make lint` | `lint-shell` (shellcheck) + `lint-yaml` (yamllint) + `lint-ansible` (ansible-lint) |
@@ -124,10 +124,10 @@ test: deps test-fixtures test-static test-smoke ## Offline health check (no SELi
 check: test lint book-check ## Full repo health: offline tests + linters + book links
 fixtures: test-fixtures ## Deterministic + payments + blast-radius fixture suites only
 test-fixtures: ## Golden deterministic, payments + blast-radius + tune-report fixtures
-	bash scripts/run_deterministic_fixtures.sh
-	bash scripts/run_deterministic_payments_check.sh
-	bash scripts/run_blast_radius_fixtures.sh
-	bash scripts/run_tune_report_fixtures.sh
+	bash tests/run_deterministic_fixtures.sh
+	bash tests/run_deterministic_payments_check.sh
+	bash tests/run_blast_radius_fixtures.sh
+	bash tests/run_tune_report_fixtures.sh
 test-static: test-forbidden test-version test-rpm test-manifest ## Shell validators (offline)
 test-smoke: deps ## Python smoke_test.py (offline; no SELinux host)
 ```
@@ -141,17 +141,17 @@ test-smoke: deps ## Python smoke_test.py (offline; no SELinux host)
 | **blast-radius** | `classify_policy_blast_radius.sh` tiering (1 / 3 / 7 days, or fail-closed JSON) | policy diff between base and candidate modules |
 | **tune-report** | the `--tune-report` path classifies vendor-domain denials without writing a module | `tomcat_t` scenarios, host commands only |
 | **boolean query integration** | live `sesearch` boolean discovery (optional, and it skips cleanly when the tool is absent) | the only test that talks to the policy on a host |
-| **skip-AI** | sync of `generated/` against committed `selinux/` after each policy bump | the "did the AI output drift from the hand-written policy" check |
+| **offline** | sync of `generated/` against committed `selinux/` after each policy bump | the "did the generated output drift from the hand-written policy" check |
 
-The last two are refresh-driven. `scripts/refresh_skip_ai_fixture.sh` re-copies `selinux/myapp.{te,fc}` into `docs/examples/fixtures/skip_ai/generated/` after each bump. `scripts/lib/stage_skip_ai_fixture.sh` stages `policy_out/` from those fixtures for offline demo use. The tests compare the two copies and fail on drift.
+The last two are refresh-driven. `tests/refresh_offline_fixture.sh` re-copies `selinux/myapp/myapp.{te,fc}` into `tests/fixtures/offline/generated/` after each bump. `scripts/lib/stage_offline_fixture.sh` stages `policy_out/` from those fixtures for offline demo use. The tests compare the two copies and fail on drift.
 
 ## How to add a fixture, end to end
 
-1. **Create the directory.** `mkdir docs/examples/fixtures/deterministic/0X-<name>/`.
+1. **Create the directory.** `mkdir tests/fixtures/deterministic/0X-<name>/`.
 2. **Capture the AVC.** Paste the real audit line into `avc.log`. Real lines, not composite.
 3. **Decide the verdict.** Why does this log produce this verdict? Write the reason. If you cannot justify it, do not add the fixture.
 4. **Write `expected.json`.** Each row is `{ "verdict": "...", "tgt": "..." }`. If the case exits non-zero, add a `case.meta.json` with `exit_code`. If the case needs a mock, write the mock alongside the log.
-5. **Run the suite.** `bash scripts/run_deterministic_fixtures.sh` or `make test-fixtures`. If it fails, read the failure.
+5. **Run the suite.** `bash tests/run_deterministic_fixtures.sh` or `make test-fixtures`. If it fails, read the failure.
 6. **Adjust code only if the expectation is right.** A failed test is the generator answering a log differently. Either the log changed, or the rule changed. If the rule changed, the fixture passes and the code is the regression.
 
 This is the contract: code follows the decision, not the other way around.
@@ -162,7 +162,7 @@ This is the honest section. Every automated test asserts a decision the machine 
 
 | Gap | Mitigation |
 |-----|------------|
-| Compiled policy on the host | `bash scripts/compile_and_validate.sh selinux` on **rhel-qa**, and it is not automated in CI |
+| Compiled policy on the host | `bash scripts/compile_and_validate.sh selinux/<app> --app <app>` on **rhel-qa**. The `compiled-policy` job compiles and searches a throwaway store in a container, so a host-specific difference still needs the manual run |
 | Real denials under `audit.log` | staging `monitor_avc.sh` runs permissive, exports AVCs, talks |
 | Ansible behavior against a live host | `ansible/` playbooks, `enforce_production.yml`, `emergency_rollback.yml` |
 | The book's prose | generator checks links, anchors, `repo:` references (`book-check`) |
@@ -192,11 +192,11 @@ The fixture suite needs `python3` and PyYAML (`pip3 install -r cli/requirements.
 Every test must pass. Now add a fixture. The log must be one record per line, in the shape `ausearch` writes. The runner reads `type=AVC` lines and ignores a wrapped record:
 
 ```bash
-$ mkdir docs/examples/fixtures/deterministic/99-temp-drift/
-$ cat > docs/examples/fixtures/deterministic/99-temp-drift/avc.log <<'AVC'
+$ mkdir tests/fixtures/deterministic/99-temp-drift/
+$ cat > tests/fixtures/deterministic/99-temp-drift/avc.log <<'AVC'
 type=AVC msg=audit(1710009999.000:900): avc:  denied  { write } for  pid=9999 comm="demo" name="x" path="/var/lib/myapp/x" dev="vda4" ino=99999 scontext=system_u:system_r:myapp_t:s0 tcontext=system_u:object_r:var_lib_t:s0 tclass=file permissive=1
 AVC
-$ cat > docs/examples/fixtures/deterministic/99-temp-drift/expected.json <<'JSON'
+$ cat > tests/fixtures/deterministic/99-temp-drift/expected.json <<'JSON'
 [
   { "verdict": "fc_drift", "tgt": "var_lib_t" }
 ]
@@ -211,7 +211,7 @@ expected. That is the signal. Restore the branch, and the suite is green again. 
 fixture.
 
 ```bash
-$ rm -rf docs/examples/fixtures/deterministic/99-temp-drift/
+$ rm -rf tests/fixtures/deterministic/99-temp-drift/
 ```
 
 That is the whole loop. The fixture is the test. The test is the decision. The decision is the specification.

@@ -1,6 +1,5 @@
 """
-avc_preprocess.py — Merge, dedupe, and subtract existing allows from AVC evidence
-before sending structured access needs to the LLM.
+avc_preprocess.py — Merge AVC lines and subtract allows already present in a .te.
 """
 
 from __future__ import annotations
@@ -10,11 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from selinux_gen import AvcEntry
+from policy_rules import JAVA_EXEC_FILE_PERMS
 
+if TYPE_CHECKING:
+    from avc_parse import AvcEntry
+
+# Braced `{ read write }` and a single permission without braces (`execmem`).
 ALLOW_RULE_RE = re.compile(
-    r"^\s*allow\s+(\S+)\s+(\S+):(\S+)\s+\{([^}]+)\}\s*;?\s*$",
+    r"^\s*allow\s+(\S+)\s+(\S+):(\S+)\s+(?:\{([^}]+)\}|([^{}\s;]+))\s*;\s*$",
     re.MULTILINE,
 )
 
@@ -67,13 +69,43 @@ def merge_avc_entries(entries: list[AvcEntry]) -> list[AccessNeed]:
     return needs
 
 
+def _te_rules_only(te_text: str) -> str:
+    """Drop comments. A note that names a macro is not an allow."""
+    return "\n".join(line.split("#", 1)[0] for line in te_text.splitlines())
+
+
 def parse_existing_allows(te_text: str) -> dict[tuple[str, str, str], frozenset[str]]:
-    """Parse allow rules from existing .te source into a lookup table."""
+    """Parse allow rules from existing .te source into a lookup table.
+
+    `self` is the source domain, so an AVC whose target type is that domain
+    matches `allow domain self:class perm`.
+    """
+    te_text = _te_rules_only(te_text)
     allows: dict[tuple[str, str, str], set[str]] = {}
+
+    def add(src_type: str, tgt_type: str, tclass: str, perms: frozenset[str]) -> None:
+        allows.setdefault((src_type, tgt_type, tclass), set()).update(perms)
+
     for match in ALLOW_RULE_RE.finditer(te_text):
-        src_type, tgt_type, tclass, perm_block = match.groups()
-        key = (src_type, tgt_type, tclass)
-        allows.setdefault(key, set()).update(normalize_perms(perm_block))
+        src_type, tgt_type, tclass, braced, single = match.groups()
+        perms = normalize_perms(braced if braced is not None else single or "")
+        if not perms:
+            continue
+        add(src_type, tgt_type, tclass, perms)
+        if tgt_type == "self":
+            add(src_type, src_type, tclass, perms)
+    # corecmd_exec_bin(domain) and java_exec(domain) are can_exec on bin_t. On RHEL 9
+    # java_exec_t is an alias of bin_t, so an AVC names bin_t. Neither is an entrypoint.
+    for match in re.finditer(
+        r"\b(?:corecmd_exec_bin|java_exec)\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", te_text
+    ):
+        for exec_type in ("bin_t", "java_exec_t"):
+            add(match.group(1), exec_type, "file", JAVA_EXEC_FILE_PERMS)
+    for match in re.finditer(
+        r"\bcan_exec\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*(bin_t|java_exec_t)\s*\)", te_text
+    ):
+        for exec_type in ("bin_t", "java_exec_t"):
+            add(match.group(1), exec_type, "file", JAVA_EXEC_FILE_PERMS)
     return {key: frozenset(perms) for key, perms in allows.items()}
 
 
@@ -128,7 +160,7 @@ def format_structured_summary(
     already_covered: list[AccessNeed],
     stats: dict[str, int],
 ) -> str:
-    """Build human- and LLM-friendly summary text."""
+    """Build a readable summary of net-new and already-covered access."""
     sections = [
         MACRO_COVERAGE_NOTE,
         "",
@@ -154,9 +186,6 @@ def preprocess_avc_entries(
 ) -> tuple[str, dict[str, int]]:
     """
     Merge AVC entries, subtract existing allows, return summary text and stats.
-
-    When every permission is already covered, net-new is empty; callers should
-    fall back to the merged set for LLM input.
     """
     raw_count = len(entries)
     merged = merge_avc_entries(entries)
@@ -180,8 +209,8 @@ def preprocess_avc_file(
     *,
     existing_te: str = "",
 ) -> tuple[str, dict[str, int]]:
-    """Load AVC file, filter, merge, subtract, and return structured summary."""
-    from selinux_gen import filter_avc_entries, filter_prompt_avc_entries, parse_avc_line
+    """Load AVC file, filter to the domain, merge, and subtract existing allows."""
+    from avc_parse import filter_avc_entries, parse_avc_line
 
     if not path.is_file():
         raise RuntimeError(f"Audit log not found: {path}")
@@ -192,8 +221,7 @@ def preprocess_avc_file(
             entries.append(parse_avc_line(line))
 
     entries = filter_avc_entries(entries, domain)
-    entries = filter_prompt_avc_entries(entries, domain)
-    return build_llm_avc_summary(entries, existing_te=existing_te)
+    return preprocess_avc_entries(entries, existing_te=existing_te)
 
 
 def preprocess_avc_lines(
@@ -202,8 +230,8 @@ def preprocess_avc_lines(
     *,
     existing_te: str = "",
 ) -> tuple[str, dict[str, int]]:
-    """Parse raw AVC lines (e.g. from ausearch), filter, merge, subtract."""
-    from selinux_gen import filter_avc_entries, filter_prompt_avc_entries, parse_avc_line
+    """Parse raw AVC lines (for example from ausearch), filter, merge, subtract."""
+    from avc_parse import filter_avc_entries, parse_avc_line
 
     entries: list[AvcEntry] = []
     for line in lines:
@@ -211,46 +239,4 @@ def preprocess_avc_lines(
             entries.append(parse_avc_line(line))
 
     entries = filter_avc_entries(entries, domain)
-    entries = filter_prompt_avc_entries(entries, domain)
-    return build_llm_avc_summary(entries, existing_te=existing_te)
-
-
-def build_llm_avc_summary(
-    entries: list[AvcEntry],
-    *,
-    existing_te: str = "",
-) -> tuple[str, dict[str, int]]:
-    """
-    Build the structured summary for LLM input.
-
-    When subtracting existing .te leaves no net-new rows, return a no-changes
-    summary instead of re-sending the full merged table to the LLM.
-    """
-    summary, stats = preprocess_avc_entries(entries, existing_te=existing_te)
-    if stats["net_new"] == 0 and stats["merged"] > 0:
-        merged = merge_avc_entries(entries)
-        existing = parse_existing_allows(existing_te)
-        _, already_covered = subtract_covered(merged, existing)
-        stats = dict(stats)
-        stats["no_changes_needed"] = 1
-        summary = "\n".join(
-            [
-                MACRO_COVERAGE_NOTE,
-                "",
-                "## Net-new access needs (from AVCs, not in existing .te)",
-                "(none — all merged AVC permissions appear covered by existing policy)",
-                "",
-                "## Already covered by existing policy (for reference only)",
-                _format_need_table(already_covered),
-                "",
-                (
-                    "Stats: "
-                    f"raw={stats['raw']} merged={stats['merged']} "
-                    f"net_new=0 already_covered={stats['already_covered']} "
-                    "no_changes_needed=1"
-                ),
-                "",
-                "No te_content changes required unless new AVCs appear after redeploy.",
-            ]
-        )
-    return summary, stats
+    return preprocess_avc_entries(entries, existing_te=existing_te)

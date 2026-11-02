@@ -1,0 +1,13 @@
+policy_module(bypass, 1.0.0)
+
+require {
+	attribute unconfined_domain_type;
+}
+
+type bypass_t;
+type bypass_exec_t;
+
+domain_type(bypass_t)
+files_type(bypass_exec_t)
+
+typeattribute bypass_t unconfined_domain_type;

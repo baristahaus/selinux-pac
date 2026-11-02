@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# bin/sepac — launcher for cli/sepac.py
+# Find the repo root from this script's own path (follows symlinks).
+set -euo pipefail
+SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}")"
+REPO="$(cd "$(dirname "${SELF}")/.." && pwd)"
+exec python3 "${REPO}/cli/sepac.py" "$@"

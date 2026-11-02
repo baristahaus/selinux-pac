@@ -61,7 +61,7 @@ Before you add `allow myapp_t myapp_t:capability net_bind_service;` to the modul
 
 `SystemCallFilter=` and `NoNewPrivileges=` complement a policy module in one direction: the unit already refuses the operations that the policy needs to allow. A unit that drops privileges needs fewer allows, because the unit owns the denial. The policy covers only what the unit did not already refuse.
 
-A unit with `SystemCallFilter=~@clock @debug @mount @raw-io @signal @cpu-emulation @module @file-system @network-io @privileged` refuses every syscall that the policy needs to allow. A unit with `ProtectSystem=strict` refuses every directory that the policy needs to label. Read the unit before you write allows. [§3 of *Designing a Domain*](../part2/11-designing-a-domain.md) explains the trade-off. The `init_daemon_domain` interface in the repo stands for each block of review that it expands to.
+A unit with `SystemCallFilter=~@clock @debug @mount @raw-io @signal @cpu-emulation @module @file-system @network-io @privileged` refuses every syscall that the policy needs to allow. A unit with `ProtectSystem=strict` refuses every directory that the policy needs to label. Read the unit before you write allows. The unit-hardening section of [*Designing a Domain*](../part2/11-designing-a-domain.md) explains the trade-off. The `init_daemon_domain` interface in the repo stands for each block of review that it expands to.
 
 When both are in play, who removes which denial? The denial of the unit lands first: if `SystemCallFilter` refuses the call, the kernel does not reach SELinux. If SELinux refuses the tuple, the denial of the unit is already silent. The policy allows, the unit allows, and the call completes. Each layer owns the call that the next layer does not see. That is why `systemctl cat <unit>` before `sesearch` is the single most expensive command in the playbook.
 
@@ -91,7 +91,7 @@ This book teaches SELinux for RHEL for four reasons. RHEL ships with SELinux as 
 
 ## Policy modules are code
 
-A policy module has an author, a version, a review, and a supply chain. `selinux/policy_version.txt` is the version, `selinux/myapp.te` is the author, the PR is the review, and `myapp-selinux-1.4.0-1.rpm` is the supply chain. A module that is too wide is a vulnerability: every rule that is wider than the tuple is a rule that nobody reviewed. A module that is never reviewed is an unknown: the `allow shopapi_t var_t:file write;` that nobody ever read.
+A policy module has an author, a version, a review, and a supply chain. `selinux/myapp/policy_version.txt` is the version, `selinux/myapp/myapp.te` is the author, the PR is the review, and `myapp-selinux-1.4.0-1.rpm` is the supply chain. A module that is too wide is a vulnerability: every rule that is wider than the tuple is a rule that nobody reviewed. A module that is never reviewed is an unknown: the `allow shopapi_t var_t:file write;` that nobody ever read.
 
 The review gates in Part III each own one of those properties: `forbidden-patterns`, `version-consistency`, `validate_policy_semantics.sh`, and `validate_forbidden_patterns.sh`. The refusal of each gate is the only failure that gate catches, and the pass of each gate is the only claim that gate makes. A module that passes every gate is not a module that is correct. It is a module that was not *found* to be incorrect. Every module that is correct passes every gate, and every module that is incorrect fails at least one.
 

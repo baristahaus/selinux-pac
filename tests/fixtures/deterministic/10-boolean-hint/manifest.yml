@@ -1,0 +1,20 @@
+# This denial is httpd_t, not myapp_t. The curated hint matches httpd_t offline.
+app_name: httpd
+domain: httpd_t
+
+paths:
+  install_root: /usr/sbin
+  var_dir: /var/lib/httpd
+  log_dir: /var/log/httpd
+  runtime_dir: /run/httpd
+
+services:
+  primary:
+    unit: httpd.service
+    domain: httpd_t
+
+http:
+  host: 127.0.0.1
+  port: 80
+  endpoints:
+    - /

@@ -1,6 +1,6 @@
 # Local-connection lab (Ansible runs *on* the SELinux host).
 # Two RHEL boxes from a laptop: use inventory.dev.yml / inventory.production.yml
-# (scripts/setup_rhel_hosts.sh). Demo app is shopapi (demo_bootstrap.sh --shopapi-only).
+# (lab/setup_rhel_hosts.sh). Demo app is shopapi (demo_bootstrap.sh --shopapi-only).
 
 all:
   hosts:

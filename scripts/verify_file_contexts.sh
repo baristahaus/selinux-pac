@@ -5,12 +5,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_ROOT="${INSTALL_ROOT:-/opt/myapp}"
-VAR_DIR="${VAR_DIR:-/var/lib/myapp}"
-LOG_DIR="${LOG_DIR:-/var/log/myapp}"
-RUNTIME_DIR="${RUNTIME_DIR:-/run/myapp}"
-APP_NAME="${POLICY_APP:-myapp}"
-BIN_DIR="${BIN_DIR:-${INSTALL_ROOT}/bin}"
+INSTALL_ROOT=""
+VAR_DIR=""
+LOG_DIR=""
+RUNTIME_DIR=""
+APP_NAME=""
+BIN_DIR=""
 SKIP_SELINUX="${SKIP_SELINUX:-0}"
 
 RED='\033[0;31m'
@@ -48,7 +48,7 @@ while [[ $# -gt 0 ]]; do
         --var-dir) VAR_DIR="$2"; shift 2 ;;
         --log-dir) LOG_DIR="$2"; shift 2 ;;
         --runtime-dir) RUNTIME_DIR="$2"; shift 2 ;;
-        --app-name) APP_NAME="$2"; shift 2 ;;
+        --app-name|--app) APP_NAME="$2"; shift 2 ;;
         --skip-if-unavailable) SKIP_IF_UNAVAILABLE=1; shift ;;
         --pre-service-restart) PRE_SERVICE_RESTART=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -56,6 +56,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+BIN_DIR="${INSTALL_ROOT}/bin"
+
+[[ -n "${APP_NAME}" ]] || { log_error "--app-name NAME is required"; exit 2; }
+INSTALL_ROOT="${INSTALL_ROOT:-/opt/${APP_NAME}}"
+VAR_DIR="${VAR_DIR:-/var/lib/${APP_NAME}}"
+LOG_DIR="${LOG_DIR:-/var/log/${APP_NAME}}"
+RUNTIME_DIR="${RUNTIME_DIR:-/run/${APP_NAME}}"
 BIN_DIR="${INSTALL_ROOT}/bin"
 
 if [[ "${SKIP_SELINUX}" == "1" ]]; then
@@ -151,7 +158,7 @@ check_labeled_dir() {
     restorecon_dry "${dir}"
 }
 
-# Narrow restorecon scope: data dir + app entrypoints (skip venv tree — FCOS relabel risk)
+# Narrow restorecon scope: data dir + app entrypoints (skip the venv tree).
 check_labeled_dir "${VAR_DIR}"
 if [[ -d "${LOG_DIR}" ]]; then
     restorecon_dry "${LOG_DIR}"

@@ -1,6 +1,6 @@
 # Prod RHEL box (canary → soak → enforce).
 # Copy to ansible/inventory.production.yml (gitignored) or generate with:
-#   bash scripts/setup_rhel_hosts.sh write --dev-host HOST --prod-host HOST
+#   bash lab/setup_rhel_hosts.sh write --dev-host HOST --prod-host HOST
 #
 # One host is both the canary group and the production group. Add more names
 # under production: when you grow a fleet.
@@ -35,10 +35,13 @@ all:
     policy_artifact_dir: "{{ playbook_dir }}/.."
     policy_pp_src: ""
     ansible_env_path: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    soak_marker_file: "{{ var_dir }}/selinux_canary_deployed_at"
+    soak_marker_file: "/var/lib/selinux-policy-ops/{{ app_name }}/selinux_canary_deployed_at"
     soak_min_days: 7
     soak_max_avc: 0
     soak_max_net_new: 0
     soak_use_net_new: true
     rollback_dnf_version: ""
     http_probe_host: "127.0.0.1"
+    selinux_rpm_repo_baseurl: "http://rhel-qa.example.com:8765"
+    selinux_rpm_gpgkey: "http://rhel-qa.example.com:8765/RPM-GPG-KEY"
+    selinux_pac_host_role: production

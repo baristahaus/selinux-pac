@@ -98,7 +98,7 @@ def filter_fc_fix_lines(
 def strip_redundant_fc_lines(baseline_fc: str, candidate_fc: str) -> str:
     """
     Drop new candidate lines that only duplicate coverage already in baseline_fc.
-    Used after LLM returns a full replacement .fc file.
+    Used when a candidate .fc repeats lines the baseline already covers.
     """
     baseline_lines = {
         ln.strip()

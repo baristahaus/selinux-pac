@@ -1,9 +1,9 @@
 # QA RHEL box (policy discovery). Filename inventory.dev.yml is legacy.
 # Copy to ansible/inventory.dev.yml (gitignored) or generate with:
-#   bash scripts/setup_rhel_hosts.sh write --qa-host HOST --prod-host HOST
+#   bash lab/setup_rhel_hosts.sh write --qa-host HOST --prod-host HOST
 #
 # Run Ansible from a controller (laptop or AAP). The demo app is installed
-# on the host with: sudo bash scripts/demo_bootstrap.sh --shopapi-only
+# on the host with: sudo bash lab/demo_bootstrap.sh --shopapi-only
 #
 # Controller-only: policy_artifact_dir, policy_pp_src (compiled .pp on this machine).
 # On rhel-qa (clone path): selinux_ops_dir, app_manifest_path.
@@ -30,9 +30,10 @@ all:
     policy_pp_src: "{{ policy_artifact_dir }}/selinux/shopapi/shopapi.pp"
     app_manifest_path: /home/ansible/selinux-pac/config/shopapi.manifest.yml
     ansible_env_path: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    soak_marker_file: "{{ var_dir }}/selinux_canary_deployed_at"
+    soak_marker_file: "/var/lib/selinux-policy-ops/{{ app_name }}/selinux_canary_deployed_at"
     soak_min_days: 0
     soak_max_avc: 0
     soak_max_net_new: 0
     soak_use_net_new: true
     http_probe_host: "127.0.0.1"
+    selinux_pac_host_role: qa

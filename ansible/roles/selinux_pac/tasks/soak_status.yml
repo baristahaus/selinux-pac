@@ -5,7 +5,7 @@
     --domain {{ domain }}
     --manifest {{ app_manifest_path }}
     --marker-file {{ soak_marker_file }}
-    --report-file {{ pac_manifest.deploy.deploy_report_file | default(var_dir ~ '/selinux_deploy_report.json') }}
+    --report-file {{ pac_manifest.deploy.deploy_report_file | default('/var/lib/selinux-policy-ops/' ~ app_name ~ '/selinux_deploy_report.json') }}
     --var-dir {{ var_dir }}
   register: soak_status_raw
   changed_when: false
@@ -23,3 +23,12 @@
       Raw AVCs since marker: {{ soak_status.avc_count_since_marker }}
       Net-new access needs: {{ soak_status.avc_net_new_count }} (fail_closed={{ soak_status.avc_fail_closed }})
       Deploy report: {{ soak_status.report_status }} gate_ok={{ soak_status.report_gate_ok }}
+
+- name: Warn when a canary marker is older than 30 days
+  ansible.builtin.debug:
+    msg: >-
+      Abandoned canary {{ item }} is older than 30 days.
+      dontaudit stays off for the whole host until that app is enforced
+      or the marker is removed.
+  loop: "{{ soak_status.stale_canary_markers | default([]) }}"
+  when: (soak_status.stale_canary_markers | default([])) | length > 0

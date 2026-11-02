@@ -1,15 +1,68 @@
 ---
+- name: Import the policy repo public key
+  ansible.builtin.rpm_key:
+    key: "{{ selinux_rpm_gpgkey }}"
+    state: present
+  when:
+    - selinux_ops_from_package | bool
+    - selinux_rpm_gpgkey | default('') | length > 0
+
+- name: Add the signed policy repository
+  ansible.builtin.yum_repository:
+    name: selinux-pac
+    description: SELinux Policy-as-Code
+    baseurl: "{{ selinux_rpm_repo_baseurl }}"
+    gpgcheck: 1
+    gpgkey: "{{ selinux_rpm_gpgkey }}"
+    enabled: true
+  when:
+    - selinux_ops_from_package | bool
+    - selinux_rpm_repo_baseurl | default('') | length > 0
+    - selinux_rpm_gpgkey | default('') | length > 0
+
+- name: Install selinux-pac CLI package
+  ansible.builtin.dnf:
+    name: selinux-pac
+    state: latest
+    update_cache: true
+  when: selinux_ops_from_package | bool
+
 - name: Install selinux-policy-ops RPM when requested
   ansible.builtin.dnf:
     name: selinux-policy-ops
-    state: present
+    state: latest
+    update_cache: true
   when: selinux_ops_from_package | bool
 
 - name: Install application SELinux policy RPM when requested
   ansible.builtin.dnf:
     name: "{{ selinux_pac_package }}"
-    state: present
+    state: latest
+    update_cache: true
   when: selinux_ops_from_package | bool
+
+- name: Create selinux-pac configuration directory
+  ansible.builtin.file:
+    path: /etc/selinux-pac/apps
+    state: directory
+    mode: "0755"
+
+- name: Write host role file
+  ansible.builtin.copy:
+    content: "{{ selinux_pac_host_role }}\n"
+    dest: /etc/selinux-pac/role
+    mode: "0644"
+  when: selinux_pac_host_role | default('') | length > 0
+
+- name: Copy application manifest to /etc/selinux-pac/apps/
+  ansible.builtin.copy:
+    src: "{{ app_manifest_path }}"
+    dest: "/etc/selinux-pac/apps/{{ app_name }}.manifest.yml"
+    mode: "0644"
+    remote_src: true
+  when:
+    - app_manifest_path | default('') | length > 0
+    - app_manifest_path is not match('/etc/selinux-pac/apps/')
 
 - name: Ensure policy staging directory exists
   ansible.builtin.file:

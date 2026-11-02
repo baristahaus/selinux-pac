@@ -6,6 +6,7 @@ Offline fixtures may supply only overrides; policy query requires setools + poli
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shutil
@@ -166,6 +167,18 @@ def query_policy_identity(policy_kern: Path | None = None) -> dict[str, str]:
 
 
 def list_booleans_with_descriptions() -> tuple[list[BooleanMatch], str]:
+    """Policy booleans with descriptions. Read once per process: semanage is slow."""
+    rows, err = _list_booleans_cached()
+    return list(rows), err
+
+
+@functools.lru_cache(maxsize=1)
+def _list_booleans_cached() -> tuple[tuple[BooleanMatch, ...], str]:
+    rows, err = _list_booleans_uncached()
+    return tuple(rows), err
+
+
+def _list_booleans_uncached() -> tuple[list[BooleanMatch], str]:
     proc = _run(["semanage", "boolean", "-l"])
     if proc.returncode == 0 and proc.stdout.strip():
         out: list[BooleanMatch] = []
@@ -241,6 +254,103 @@ def boolean_permits_need(
     return True
 
 
+# A boolean covers a need when conditional allow rules whose expression names that
+# boolean grant every permission in the need (either branch, as sesearch --bool
+# reports them). The old path ran one sesearch per boolean per permission, about
+# 350 policy loads per denial. These load the policy once, or run one sesearch.
+_COND_RULE_RE = re.compile(
+    r"^\s*allow\s+\S+\s+\S+:\S+\s+(\{[^}]*\}|\S+)\s*;\s*\[\s*(.*?)\s*\]:(?:True|False)\s*$"
+)
+_COND_OPERATORS = frozenset({"&&", "||", "!", "^", "==", "!="})
+_SETOOLS_POLICY: dict[tuple[str, int], object] = {}
+
+
+def booleans_from_sesearch_lines(lines: list[str], need: AccessNeed) -> set[str]:
+    """Booleans whose conditional rules, together, grant every permission in need."""
+    granted: dict[str, set[str]] = {}
+    for line in lines:
+        match = _COND_RULE_RE.match(line)
+        if not match:
+            continue
+        perms = set(match.group(1).strip("{} ").split()) & need.perms
+        for token in re.split(r"[\s()]+", match.group(2)):
+            name = token.lstrip("!")
+            if name and name not in _COND_OPERATORS:
+                granted.setdefault(name, set()).update(perms)
+    return {name for name, perms in granted.items() if need.perms <= perms}
+
+
+def _setools_policy(kern: Path) -> object:
+    import setools  # python3-setools, a dependency of setools-console
+
+    key = (str(kern), kern.stat().st_mtime_ns)
+    policy = _SETOOLS_POLICY.get(key)
+    if policy is None:
+        _SETOOLS_POLICY.clear()
+        policy = setools.SELinuxPolicy(str(kern))
+        _SETOOLS_POLICY[key] = policy
+    return policy
+
+
+def _booleans_via_setools(kern: Path, need: AccessNeed) -> set[str]:
+    import setools
+
+    try:
+        query = setools.TERuleQuery(
+            _setools_policy(kern),
+            ruletype=["allow"],
+            source=need.src_type,
+            target=need.tgt_type,
+            tclass=[need.tclass],
+            perms=set(need.perms),
+        )
+        rules = list(query.results())
+    except Exception as exc:  # unknown type or class, unreadable policy
+        raise OSError(f"setools query failed: {exc}") from exc
+    granted: dict[str, set[str]] = {}
+    for rule in rules:
+        try:
+            expr = rule.conditional
+        except Exception:  # unconditional rule
+            continue
+        perms = {str(p) for p in rule.perms} & need.perms
+        for boolean in expr.booleans:
+            granted.setdefault(str(boolean), set()).update(perms)
+    return {name for name, perms in granted.items() if need.perms <= perms}
+
+
+def _booleans_via_sesearch(kern: Path, need: AccessNeed) -> set[str]:
+    cmd = [
+        "sesearch",
+        "--allow",
+        "-s",
+        need.src_type,
+        "-t",
+        need.tgt_type,
+        "-c",
+        need.tclass,
+        "-p",
+        ",".join(sorted(need.perms)),
+        str(kern),
+    ]
+    proc = _run(cmd)
+    if proc.returncode not in (0, 1):
+        raise OSError((proc.stderr or proc.stdout or f"sesearch failed: {cmd}").strip())
+    if proc.stderr.strip():
+        raise OSError(proc.stderr.strip())
+    return booleans_from_sesearch_lines(proc.stdout.splitlines(), need)
+
+
+def booleans_covering_need(kern: Path, need: AccessNeed) -> set[str]:
+    """Load the policy once with setools when it imports; otherwise one sesearch."""
+    try:
+        import setools
+    except ImportError:
+        return _booleans_via_sesearch(kern, need)
+    del setools
+    return _booleans_via_setools(kern, need)
+
+
 def lookup_booleans_for_need(
     need: AccessNeed,
     *,
@@ -263,13 +373,11 @@ def lookup_booleans_for_need(
             status="unavailable",
             detail=list_err or "Could not enumerate policy booleans.",
         )
-    matched: list[BooleanMatch] = []
     try:
-        for row in booleans:
-            if boolean_permits_need(kern, row.name, need):
-                matched.append(row)
+        covering = booleans_covering_need(kern, need)
     except OSError as exc:
         return BooleanLookupResult(status="unavailable", detail=str(exc))
+    matched = [row for row in booleans if row.name in covering]
     if not matched:
         return BooleanLookupResult(status="none")
     return BooleanLookupResult(status="matched", matches=tuple(matched))

@@ -6,7 +6,7 @@ You are on the bridge. The app team calls: requests are failing, the dashboard i
 
 Every incident under this chapter is about one decision: is the domain still permissive, or is it already enforcing? That single fact routes every command, every playbook, and every call to the app team.
 
-The rules are the same as the whole book, and as §2 and §6 of the production runbook: the OS stays Enforcing. Only the application's own domain is ever made permissive. Production is never mutated by hand.
+The rules are the same as the whole book: the OS stays Enforcing. Only the application's own domain is ever made permissive. Production is never mutated by hand.
 
 ```mermaid
 flowchart TD
@@ -53,13 +53,13 @@ ls /var/lib/myapp/selinux_canary_deployed_at   # exists → soak running; the cl
 ansible-playbook -i ansible/inventory.production.yml ansible/soak_status.yml --limit canary  # playbook-level state
 ```
 
-`getenforce` is Enforcing throughout soak. Only `myapp_t` is permissive. That is the two-layer reminder in §3.5 of the production readiness guide. If `semanage permissive -l` returns empty, you are in shape B. If it returns your domain name, you are in shape A.
+`getenforce` is Enforcing throughout soak. Only `myapp_t` is permissive. That is the two-layer rule in [Shipping a policy with sepac](../../docs/shipping.md). If `semanage permissive -l` returns empty, you are in shape B. If it returns your domain name, you are in shape A.
 
 ## Shape B — already enforcing, the app is failing now
 
 This is the outage. The permissive domain is gone, the policy is running its full decision, and the denial is blocking a live path. You roll back first.
 
-The playbook is [`repo:ansible/emergency_rollback.yml`](ansible/emergency_rollback.yml). It is the AAP template `SELinux – Rollback`. It is the operator's emergency card. It does not downgrade the host, and it does not disable the kernel. It puts the domain back on the permissive list, optionally downgrades the RPM, and captures the AVCs for the PR path that follows.
+The playbook is [`repo:ansible/emergency_rollback.yml`](../../ansible/emergency_rollback.yml). It is the AAP template `SELinux – Rollback`. It is the operator's emergency card. It does not downgrade the host, and it does not disable the kernel. It puts the domain back on the permissive list, optionally downgrades the RPM, and captures the AVCs for the PR path that follows.
 
 ### What the rollback playbook does, in order
 
@@ -92,7 +92,7 @@ The operator must supply two things. The domain name comes from the inventory (`
 
 ## Break-glass: `force_enforce` still requires a ticket
 
-The guard rails in [`repo:ansible/roles/selinux_pac/tasks/enforce.yml`](ansible/roles/selinux_pac/tasks/enforce.yml) do not promise safety. They promise a review gate that can be skipped.
+The guard rails in [`repo:ansible/roles/selinux_pac/tasks/enforce.yml`](../../ansible/roles/selinux_pac/tasks/enforce.yml) do not promise safety. They promise a review gate that can be skipped.
 
 | Guard rail | What it enforces |
 |---|---|
@@ -106,7 +106,7 @@ The guard rails in [`repo:ansible/roles/selinux_pac/tasks/enforce.yml`](ansible/
 | **Deploy report gate** (lines 73–79) | Skipped when `force_enforce=true`. |
 | **Break-glass message** (lines 80–83) | `force_enforce=true`: skipping soak gate (document approval in change ticket). |
 
-After the gate is skipped, the role does four things. It re-enables the dontaudit baseline with `semodule -B`. It removes the permissive flag, with `semanage permissive -d`, or with `semodule -r {{ stub_module_name }}` on the FCOS overlay. It checks and restarts the services. Then it writes the enforce deploy report. The `rescue:` block puts the domain back to permissive if any of those steps fails. So the operator keeps a safety net even when the gate is gone.
+After the gate is skipped, the role does four things. It re-enables the dontaudit baseline with `semodule -B`. It removes the permissive flag with `community.general.selinux_permissive` (`permissive: false`). It checks and restarts the services. Then it writes the enforce deploy report. The `rescue:` block puts the domain back to permissive if any of those steps fails. So the operator keeps a safety net even when the gate is gone.
 
 The guard rails do not prevent an outage. They record that the operator accepted the risk. That is why the change ticket is the only thing on this line: it is the audit trail, not a safety net.
 
@@ -145,7 +145,7 @@ The incident's real deliverable is a reviewed commit, not a host edit. Capture t
 |---|---|---|
 | **Filtered AVCs** | `/tmp/emergency_avc.log`. `emergency_rollback.yml` step 8 writes it, or the operator writes it on the host. | `ausearch -m AVC,USER_AVC,SELINUX_ERR,USER_SELINUX_ERR -ts recent --format raw` filtered to `{{ domain }}` and persistent paths. `generate_emergency_patch.yml` requires this log to be present. |
 | **What was changed and when** | `/var/lib/myapp/selinux_deploy_report.json`: deploy or rollback phase, marker timestamp, policy version | `post_deploy_report.sh` with `phase=rollback` (or `phase=enforce`) writes this. |
-| **The PR** | `policy_out/` directory. Only the controller writes it. | `generate_emergency_patch.yml` runs `deterministic_gen.py` against the AVC log and the manifest, and writes `findings.json`, `avc_summary.txt`, `pr_summary.md`, and the `.te`/`.fc` patch. The LLM polish is optional, and it needs `OPENAI_API_KEY` set for prose. The result never goes on prod. |
+| **The PR** | `policy_out/` directory. Only the controller writes it. | `generate_emergency_patch.yml` runs `deterministic_gen.py` against the AVC log and the manifest, and writes `findings.json`, `avc_summary.txt`, `pr_summary.md`, and the `.te`/`.fc` patch. The result never goes on prod. |
 
 The controller is the only machine that ships the policy. The role's comments spell this out:
 
@@ -180,9 +180,9 @@ The question from the app team is "why was it enforcing with no warning?" The an
 :::
 
 ::: try Rehearse the incident
-Laptop: walk the decision table above against the `01-mislabeled-var-lib` fixture (`docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log`). It pins shape A: a denial while the domain is permissive, the path reachable, and the answer a pull request.
+Laptop: walk the decision table above against the `01-mislabeled-var-lib` fixture (`tests/fixtures/deterministic/01-mislabeled-var-lib/avc.log`). It pins shape A: a denial while the domain is permissive, the path reachable, and the answer a pull request.
 
-Two-host lab (controller only): reset the VMs with `bash scripts/reset_demo_vms.sh`. Work through Part 1 of `docs/admin/203-RHEL_TWO_HOST.md`, and deploy the canary. Then break `/feature-spool`, trigger `ansible/emergency_rollback.yml`, and check that the deploy report reads `phase: rollback`. Everything before that last command is read-only: `getenforce`, `semanage permissive -l`, `ausearch -m avc -ts recent`, `ls /var/lib/myapp/selinux_canary_deployed_at`.
+Two-host lab (controller only): reset the VMs with `bash lab/reset_demo_vms.sh`. Work through Part 1 of `docs/guides/302-TECHNICAL.md`, and deploy the canary. Then break `/feature-spool`, trigger `ansible/emergency_rollback.yml`, and check that the deploy report reads `phase: rollback`. Everything before that last command is read-only: `getenforce`, `semanage permissive -l`, `ausearch -m avc -ts recent`, `ls /var/lib/myapp/selinux_canary_deployed_at`.
 :::
 
 ## What you can do now

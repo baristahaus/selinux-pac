@@ -3,6 +3,9 @@
 selinux_ops_dir: /usr/libexec/selinux-policy-ops
 selinux_ops_from_package: true
 
+# Host role written to /etc/selinux-pac/role (qa, dev, staging, production).
+selinux_pac_host_role: ""
+
 # Application manifest ON THE TARGET (ops --manifest). Lab checkout:
 # /home/<user>/selinux-pac/config/myapp.manifest.yml — not playbook_dir.
 app_manifest_path: /etc/myapp/selinux-manifest.yml
@@ -13,25 +16,22 @@ policy_artifact_dir: "{{ playbook_dir }}/.."
 policy_pp_src: ""
 policy_staging_path: /var/lib/selinux-policy-staging/{{ app_name | default('myapp') }}.pp
 
-# policy_version is loaded from selinux/policy_version.txt in tasks/main.yml (not duplicated here).
+# policy_version is loaded from selinux/myapp/policy_version.txt in tasks/main.yml (not duplicated here).
 selinux_pac_package: "{{ app_name | default('myapp') }}-selinux-{{ policy_version }}"
 
 # Rollback via dnf (e.g. 1.1.1-1); empty skips downgrade.
 rollback_dnf_version: ""
 
-# FCOS overlay when semanage absent — compiled <app>_canary.pp under policy module dir.
-selinux_repo_dir: >-
-  {{
-    (policy_artifact_dir | dirname) ~ '/selinux'
-    if (policy_artifact_dir | basename) == 'policy_out'
-    else policy_artifact_dir ~ '/selinux'
-  }}
-stub_policy_src: "{{ selinux_repo_dir }}/{{ app_name | default('myapp') }}_canary.pp"
-stub_policy_staging: /var/lib/selinux-policy-staging/{{ app_name | default('myapp') }}_canary.pp
-ports_cil_src: "{{ selinux_repo_dir }}/{{ app_name | default('myapp') }}_ports.cil"
-ports_cil_staging: /var/lib/selinux-policy-staging/{{ app_name | default('myapp') }}_ports.cil"
+# Signed repo published on rhel-qa. Empty skips rpm_key and yum_repository.
+selinux_rpm_repo_baseurl: ""
+selinux_rpm_gpgkey: ""
 
 selinux_pac_phase: canary
+
+# Soak evidence lives outside the app var_dir. The app user owns var_dir, and
+# the domain is permissive during soak, so a marker there can be rewritten.
+soak_state_root: /var/lib/selinux-policy-ops
+soak_marker_file: "{{ soak_state_root }}/{{ app_name | default('myapp') }}/selinux_canary_deployed_at"
 
 # Soak gates (enforce + soak_monitor playbook).
 soak_min_days: 7
@@ -43,4 +43,8 @@ http_probe_host: "127.0.0.1"
 
 # Enforce / AAP survey. force_enforce never skips the change_ticket check.
 force_enforce: false
+# Required when force_enforce is true. Recorded in the deploy report.
+break_glass_reason: ""
+# Skips only the day count and the daily history. Marker, AVC, net-new, and the report still run.
+skip_soak_days: false
 change_ticket: ""

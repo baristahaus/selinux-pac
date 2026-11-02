@@ -42,16 +42,16 @@ Run one fixture by hand to see what the book means by "a denial is a question":
 
 ```bash title="Explain one golden fixture"
 python3 cli/deterministic_gen.py --explain \
-  --avc-log docs/examples/fixtures/deterministic/02-port-bind/avc.log \
+  --avc-log tests/fixtures/deterministic/02-port-bind/avc.log \
   --manifest config/myapp.manifest.yml \
-  --existing-te selinux/myapp.te \
-  --existing-fc selinux/myapp.fc
+  --existing-te selinux/myapp/myapp.te \
+  --existing-fc selinux/myapp/myapp.fc
 ```
 
 Then read the expected answer for the fixture, which CI compares against:
 
 ```bash
-cat docs/examples/fixtures/deterministic/02-port-bind/expected.json
+cat tests/fixtures/deterministic/02-port-bind/expected.json
 ```
 
 ## Path B — one RHEL host (the lab host, `rhel-qa`) {#path-b}
@@ -62,7 +62,7 @@ systemd unit, and a types-only policy seed:
 
 ```bash title="On rhel-qa, as root"
 cd ~/selinux-pac
-sudo bash scripts/demo_bootstrap.sh --shopapi-only
+sudo bash lab/demo_bootstrap.sh --shopapi-only
 ```
 
 That command installs the JVM and the `shopapi` unit. It labels the launcher as
@@ -103,16 +103,16 @@ The full pipeline uses two hosts and an Ansible controller. It generates on QA, 
 runs canary and soak on production. The repository scripts the whole thing:
 
 ```bash title="On the controller"
-bash scripts/setup_rhel_hosts.sh write --qa-host rhel-qa.example.com --prod-host rhel-prod.example.com
-bash scripts/setup_rhel_hosts.sh ping      # SSH reachability to both
-bash scripts/setup_rhel_hosts.sh doctor    # SELinux tools present on both
-bash scripts/setup_rhel_hosts.sh bootstrap # prints the next commands; runs nothing
+bash lab/setup_rhel_hosts.sh write --qa-host rhel-qa.example.com --prod-host rhel-prod.example.com
+bash lab/setup_rhel_hosts.sh ping      # SSH reachability to both
+bash lab/setup_rhel_hosts.sh doctor    # SELinux tools present on both
+bash lab/setup_rhel_hosts.sh bootstrap # prints the next commands; runs nothing
 ```
 
 That writes gitignored inventories (`ansible/inventory.dev.yml` for QA,
 `ansible/inventory.production.yml` for production). Production deliberately carries
 `selinux_ops_from_package: true` and no git checkout. The full paced walkthrough is
-[203-RHEL_TWO_HOST.md](repo:docs/admin/203-RHEL_TWO_HOST.md).
+[The two-host lab](repo:docs/guides/302-TECHNICAL.md).
 
 ## Words you need before Chapter 1
 

@@ -1,0 +1,48 @@
+# Calls the app workflow on a module this repo already ships, and runs the
+# same compiled gate on an attribute bypass. A called workflow that fails
+# would fail this check, and continue-on-error is not allowed on a caller
+# job, so the bypass path asserts the gate's non-zero exit itself.
+name: SELinux policy app proof
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  clean-module:
+    name: clean-module
+    uses: ./.github/workflows/selinux-policy-app.yml
+    with:
+      policy_dir: selinux/shopapi
+      module: shopapi
+      domain: shopapi_t
+      tools_repo: anurag-saran/selinux-pac
+      tools_ref: ${{ github.sha }}
+
+  bypass-rejected:
+    name: bypass-rejected
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
+    container: ${{ vars.RUNNER != 'rhel9-utm' && 'quay.io/centos/centos:stream9' || fromJSON('null') }}
+    steps:
+      - name: Ensure sudo
+        run: command -v sudo >/dev/null 2>&1 || dnf install -y sudo
+      - name: Install git for checkout
+        run: sudo dnf install -y git
+      - uses: actions/checkout@v4
+      - name: Install policy toolchain
+        run: sudo dnf install -y selinux-policy-devel selinux-policy-targeted setools-console python3 python3-pyyaml
+      - name: Attribute bypass must be rejected
+        run: |
+          set -euo pipefail
+          set +e
+          out="$(sudo bash scripts/validate_policy_semantics.sh tests/fixtures/compiled-bypasses/can-setenforce --app bypass 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "${out}"
+          if [[ "${rc}" -eq 0 ]]; then
+            echo "bypass module was accepted" >&2
+            exit 1
+          fi
+          grep -F "attribute grant beyond control: setenforce on security" <<<"${out}"

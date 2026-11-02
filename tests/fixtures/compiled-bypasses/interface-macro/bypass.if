@@ -1,0 +1,7 @@
+interface(`bypass_read_shadow',`
+	gen_require(`
+		type shadow_t;
+		class file read;
+	')
+	allow $1 shadow_t:file read;
+')

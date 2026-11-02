@@ -9,7 +9,12 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=lib/version.sh
 source "${SCRIPT_DIR}/lib/version.sh"
 
-SELINUX_ROOT="${PROJECT_ROOT}/selinux"
+SELINUX_ROOT="${SELINUX_ROOT:-${PROJECT_ROOT}/selinux}"
+# Packaging checks belong to this repo. An app repo sets SELINUX_ROOT to its own tree.
+own_tree=0
+if [[ "${SELINUX_ROOT}" == "${PROJECT_ROOT}/selinux" ]]; then
+    own_tree=1
+fi
 errors=0
 
 check_module() {
@@ -51,7 +56,9 @@ while IFS= read -r version_file; do
     [[ -n "${version_file}" ]] || continue
     dir="$(dirname "${version_file}")"
     if [[ "${dir}" == "${SELINUX_ROOT}" ]]; then
-        module="${POLICY_APP:-myapp}"
+        # Flat layout: infer module from the single .te in the directory.
+        module="$(cd "${dir}" && ls -1 *.te 2>/dev/null | sed 's/\.te$//' | head -1)"
+        [[ -n "${module}" ]] || { echo "validate_version_consistency: no .te in ${dir}" >&2; errors=$((errors + 1)); continue; }
         te_file="${SELINUX_ROOT}/${module}.te"
         spec_file="${PROJECT_ROOT}/packaging/${module}-selinux.spec"
         if [[ ! -f "${spec_file}" ]]; then
@@ -68,18 +75,20 @@ while IFS= read -r version_file; do
     check_module "${module}" "${version_file}" "${te_file}" "${spec_file}"
 done < <(find "${SELINUX_ROOT}" -name policy_version.txt | sort)
 
-if ! grep -qE 'define "modver \$\{VERSION\}"' "${PROJECT_ROOT}/packaging/build_rpms.sh"; then
-    echo "validate_version_consistency: packaging/build_rpms.sh must pass --define \"modver \${VERSION}\" from policy_version.txt" >&2
-    errors=$((errors + 1))
-fi
-
-myapp_version="${SELINUX_ROOT}/policy_version.txt"
-if [[ -f "${myapp_version}" ]]; then
-    modver_from_build="$(policy_version "${myapp_version}")"
-    canonical_myapp="$(policy_version "${myapp_version}")"
-    if [[ "${modver_from_build}" != "${canonical_myapp}" ]]; then
-        echo "validate_version_consistency: build_rpms modver (${modver_from_build}) != ${myapp_version} (${canonical_myapp})" >&2
+if [[ "${own_tree}" -eq 1 ]]; then
+    if ! grep -qE 'define "modver \$\{VERSION\}"' "${PROJECT_ROOT}/packaging/build_rpms.sh"; then
+        echo "validate_version_consistency: packaging/build_rpms.sh must pass --define \"modver \${VERSION}\" from policy_version.txt" >&2
         errors=$((errors + 1))
+    fi
+
+    myapp_version="${SELINUX_ROOT}/myapp/policy_version.txt"
+    if [[ -f "${myapp_version}" ]]; then
+        modver_from_build="$(policy_version "${myapp_version}")"
+        canonical_myapp="$(policy_version "${myapp_version}")"
+        if [[ "${modver_from_build}" != "${canonical_myapp}" ]]; then
+            echo "validate_version_consistency: build_rpms modver (${modver_from_build}) != ${myapp_version} (${canonical_myapp})" >&2
+            errors=$((errors + 1))
+        fi
     fi
 fi
 

@@ -1,0 +1,14 @@
+policy_module(bypass, 1.0.0)
+
+require {
+	type bin_t;
+	class file entrypoint;
+}
+
+type bypass_t;
+type bypass_exec_t;
+
+domain_type(bypass_t)
+files_type(bypass_exec_t)
+
+allow bypass_t bin_t:file entrypoint;

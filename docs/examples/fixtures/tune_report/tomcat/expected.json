@@ -1,9 +1,0 @@
-{
-  "commands": [
-    "semanage fcontext -a -t tomcat_var_lib_t \"/opt/appdata(/.*)?\"  &&  restorecon -Rv /opt/appdata",
-    "setsebool -P tomcat_can_network_connect on",
-    "semanage port -a -t http_port_t -p tcp 8090"
-  ],
-  "unresolvable_tgt": "ssh_home_t",
-  "no_policy_module": true
-}

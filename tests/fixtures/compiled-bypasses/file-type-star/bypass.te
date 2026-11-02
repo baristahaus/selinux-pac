@@ -1,0 +1,14 @@
+policy_module(bypass, 1.0.0)
+
+require {
+	attribute file_type;
+	class file { ioctl read write create getattr setattr lock relabelfrom relabelto append map unlink link rename execute swapon quotaon mounton audit_access open execmod watch watch_mount watch_sb watch_with_perm watch_reads execute_no_trans entrypoint };
+}
+
+type bypass_t;
+type bypass_exec_t;
+
+domain_type(bypass_t)
+files_type(bypass_exec_t)
+
+allow bypass_t file_type:file *;

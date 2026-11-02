@@ -134,7 +134,7 @@ the allow is right. Run on this laptop, fixture 09 prints:
 ```
 
 That is the honest answer offline. It is why the golden `interface`, `direct` and `boolean`
-rows come from the fixture runner instead: `scripts/smoke_test.py` mocks the interface lookup and
+rows come from the fixture runner instead: `tests/smoke_test.py` mocks the interface lookup and
 the boolean query, so `make test-fixtures` exercises the verdict logic without a policy. What the
 CLI still proves offline is everything that needs no base-policy query. Fixture 01 is `fc_drift`
 and exits 0 on this machine, with no SELinux and no sepolgen installed.
@@ -215,7 +215,7 @@ The reviewer reads the proof before signing off.
 ## Worked examples
 
 The two fixtures that demonstrate how the generator reaches for each verdict are under
-`docs/examples/fixtures/deterministic/`. Each fixture supplies an AVC line, a mock of `sepolgen`
+`tests/fixtures/deterministic/`. Each fixture supplies an AVC line, a mock of `sepolgen`
 that records whether the engine matched an interface or failed, and an `expected.json` that pins
 the verdict. Running the generator against them is what the golden fixture asserts: *the tool
 produces these verdicts for these inputs, and only these*.
@@ -313,10 +313,10 @@ fixture per run, and `--avc-log` and `--manifest` are required:
 
 ```bash
 $ python3 cli/deterministic_gen.py --explain \
-    --avc-log docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
+    --avc-log tests/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
     --manifest config/myapp.manifest.yml \
-    --existing-te selinux/myapp.te \
-    --existing-fc selinux/myapp.fc
+    --existing-te selinux/myapp/myapp.te \
+    --existing-fc selinux/myapp/myapp.fc
 ```
 
 That one prints `[fc_drift]` and exits 0. The interface-matching fixtures need a host with a

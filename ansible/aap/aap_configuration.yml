@@ -1,0 +1,167 @@
+---
+# Vars for infra.aap_configuration.dispatch.
+# The project and the production inventory must already exist.
+# aap_hostname and aap_username / aap_password (or aap_token) stay in vault.
+#
+#   ansible-playbook redhat-cop.infra.aap_configuration.configure_aap \
+#     -e @ansible/aap/aap_configuration.yml \
+#     -e selinux_aap_organization=Default \
+#     -e selinux_aap_project=selinux-pac \
+#     -e selinux_aap_inventory=production
+#
+# This dispatcher list is only the SELinux objects. Append these three
+# entries to a larger aap_configuration_dispatcher_roles list if this
+# file is not the only vars file in the play.
+
+selinux_aap_organization: Default
+selinux_aap_project: selinux-pac
+selinux_aap_inventory: production
+
+aap_configuration_dispatcher_roles:
+  - role: controller_job_templates
+    var: controller_templates
+    tags: job_templates
+  - role: controller_workflow_job_templates
+    var: controller_workflows
+    tags: workflow_job_templates
+  - role: controller_schedules
+    var: controller_schedules
+    tags: schedules
+
+controller_templates:
+  - name: SELinux – Canary
+    description: Install the module and leave the app domain permissive.
+    organization: "{{ selinux_aap_organization }}"
+    project: "{{ selinux_aap_project }}"
+    inventory: "{{ selinux_aap_inventory }}"
+    playbook: deploy_canary.yml
+    job_type: run
+    limit: canary
+    ask_variables_on_launch: true
+    state: present
+
+  - name: SELinux – Soak monitor
+    description: Daily net-new check. Attach a notification template for job failed.
+    organization: "{{ selinux_aap_organization }}"
+    project: "{{ selinux_aap_project }}"
+    inventory: "{{ selinux_aap_inventory }}"
+    playbook: soak_monitor.yml
+    job_type: run
+    limit: canary
+    ask_variables_on_launch: false
+    state: present
+
+  - name: SELinux – Soak status
+    description: Read-only soak facts. First node of Promote to enforce.
+    organization: "{{ selinux_aap_organization }}"
+    project: "{{ selinux_aap_project }}"
+    inventory: "{{ selinux_aap_inventory }}"
+    playbook: soak_status.yml
+    job_type: run
+    limit: canary
+    ask_variables_on_launch: false
+    state: present
+
+  - name: SELinux – Enforce
+    description: Remove permissive after soak. change_ticket is required.
+    organization: "{{ selinux_aap_organization }}"
+    project: "{{ selinux_aap_project }}"
+    inventory: "{{ selinux_aap_inventory }}"
+    playbook: enforce_production.yml
+    job_type: run
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey:
+      name: SELinux – Enforce
+      description: Remove permissive after soak. change_ticket is required. force_enforce defaults to false.
+      spec:
+        - type: text
+          question_name: Change ticket
+          question_description: ITSM / ServiceNow / Bugzilla id. Required for every enforce.
+          variable: change_ticket
+          required: true
+          default: ""
+          new_question: true
+        - type: multiplechoice
+          question_name: Skip soak gate (break-glass)
+          question_description: Leave false. true still requires a change ticket.
+          variable: force_enforce
+          required: true
+          default: "false"
+          choices: "false\ntrue"
+          new_question: true
+    state: present
+
+  - name: SELinux – Rollback
+    description: Break-glass only. Never add this template to the promote workflow.
+    organization: "{{ selinux_aap_organization }}"
+    project: "{{ selinux_aap_project }}"
+    inventory: "{{ selinux_aap_inventory }}"
+    playbook: emergency_rollback.yml
+    job_type: run
+    ask_variables_on_launch: true
+    state: present
+
+controller_workflows:
+  - name: SELinux – Release canary
+    description: Install the new module and start domain-permissive soak after an RPM publish.
+    organization: "{{ selinux_aap_organization }}"
+    inventory: "{{ selinux_aap_inventory }}"
+    workflow_nodes:
+      - identifier: canary
+        unified_job_template:
+          name: SELinux – Canary
+          type: job_template
+          organization:
+            name: "{{ selinux_aap_organization }}"
+        related:
+          success_nodes: []
+          failure_nodes: []
+          always_nodes: []
+    state: present
+
+  - name: SELinux – Promote to enforce
+    description: Read-only soak facts, human approval, then enforce. Daily Soak monitor stays a schedule.
+    organization: "{{ selinux_aap_organization }}"
+    inventory: "{{ selinux_aap_inventory }}"
+    workflow_nodes:
+      - identifier: soak_status
+        unified_job_template:
+          name: SELinux – Soak status
+          type: job_template
+          organization:
+            name: "{{ selinux_aap_organization }}"
+        related:
+          success_nodes:
+            - identifier: approval
+          failure_nodes: []
+          always_nodes: []
+      - identifier: approval
+        approval_node:
+          name: Approve production enforce
+          description: Confirm the soak gate and the change ticket.
+          timeout: 0
+        related:
+          success_nodes:
+            - identifier: enforce
+          failure_nodes: []
+          always_nodes: []
+      - identifier: enforce
+        unified_job_template:
+          name: SELinux – Enforce
+          type: job_template
+          organization:
+            name: "{{ selinux_aap_organization }}"
+        related:
+          success_nodes: []
+          failure_nodes: []
+          always_nodes: []
+    state: present
+
+controller_schedules:
+  - name: SELinux – Soak monitor daily
+    description: Daily net-new check on the canary group. Not a node on Promote to enforce.
+    unified_job_template: SELinux – Soak monitor
+    rrule: "DTSTART:20260101T060000Z RRULE:FREQ=DAILY;INTERVAL=1"
+    enabled: true
+    state: present

@@ -1,0 +1,6 @@
+shopapi_t
+shopapi_exec_t
+shopapi_var_lib_t
+shopapi_var_run_t
+shopapi_log_t
+shopapi_port_t

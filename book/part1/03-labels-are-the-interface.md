@@ -34,9 +34,8 @@ decision:
 
 In this project everything uses `system_u`, `system_r`/`object_r`, and `s0`. The third field
 carries the decision, and that field is the type. That is why
-`docs/training/102-SELINUX_BASICS.md` §3 spends half its page telling readers to look at the third
-field. It is also why `docs/training/101-SELINUX.md` lab 0 asks readers to "explain what is the
-difference between the type on the file and the type on the running process".
+`docs/guides/101-CONCEPTS.md` §3 spends half its page telling readers to look at the third
+field. It is also why Lab 0 in `docs/guides/104-HAND-BUILT-MODULE.md` shows a file type and a process type that differ.
 
 ::: why The three other fields are useful
 The role lets policy tell the difference between *process* and *object* at a glance. A rule like
@@ -89,7 +88,7 @@ carry a dedicated type. `restorecon` repairs it: it walks the compiled table, ma
 rewrites the inode.
 
 ```bash title="What your .fc compiles into"
-$ cat selinux/myapp.fc | head -n 3
+$ cat selinux/myapp/myapp.fc | head -n 3
 /opt/myapp                                 gen_context(system_u:object_r:myapp_exec_t,s0)
 /opt/myapp/app\.py                         gen_context(system_u:object_r:myapp_exec_t,s0)
 /opt/myapp/backend_stub\.py                gen_context(system_u:object_r:myapp_backend_exec_t,s0)
@@ -112,10 +111,7 @@ allow init_t myapp_exec_t:file entrypoint;     # systemd may exec this file
 type_transition init_t myapp_exec_t:process myapp_t;  # therefore it enters myapp_t
 ```
 
-That is the pair on lines 44–45 of `selinux/myapp.te`. `init_daemon_domain(myapp_t, myapp_exec_t)`
-is a thin wrapper that emits the same two lines plus the `require` block. The kernel consults this
-pair *the moment `init` (or `systemd`) execs the labeled entrypoint file*. The new process inherits
-the target type as its domain.
+`init_daemon_domain(myapp_t, myapp_exec_t)` is the one line in `selinux/myapp/myapp.te` that declares this pair. The macro expands to the `entrypoint` allow, the `type_transition`, and the `require` block that names `init_t` and the classes. The kernel consults the pair *the moment `init` (or `systemd`) execs the labeled entrypoint file*. The new process inherits the target type as its domain.
 
 Two ways to start a process under a custom domain, illustrated by `selinux/shopapi/shopapi.te`:
 
@@ -169,7 +165,7 @@ rules name the attribute:
 logging_log_file(shopapi_log_t)
 ```
 
-That line comes from `selinux/shopapi/shopapi.te` (line 27). It puts `shopapi_log_t` into the
+That line comes from `selinux/shopapi/shopapi.te` (line 37). It puts `shopapi_log_t` into the
 log-file group of the base policy. Every rule written against that group also covers
 `shopapi_log_t`. The same pattern covers every log type in the base policy, and it also applies to
 network ports (`corenet_port()`) and PID files (`files_pid_file()`).
@@ -193,30 +189,16 @@ well.
 
 ## One real transition, traced
 
-Here is the whole path, from policy file to running process, traced against `myapp.te`:
+Here is the whole path, from policy file to running process, traced against `myapp`:
 
-```bash title="The entrypoint → transition pair"
-$ sed -n '35,53p' selinux/myapp.te
-require {
-    type init_t;
-    class process { transition dyntransition siginh rlimitinh };
-    class file entrypoint;
-}
-
-# systemd (init_t) starts user units on FCOS — transition on labeled entrypoints
-allow init_t myapp_exec_t:file { execute read open getattr map ioctl execute_no_trans entrypoint };
-allow init_t myapp_t:process { transition dyntransition siginh rlimitinh };
-allow myapp_t myapp_exec_t:file entrypoint;
-type_transition init_t myapp_exec_t:process myapp_t;
-
-allow init_t myapp_lib_t:dir { search getattr open read };
-allow init_t myapp_lib_t:file { read open getattr map ioctl };
-
-allow init_t myapp_backend_exec_t:file { execute read open getattr map ioctl execute_no_trans entrypoint };
-allow init_t myapp_backend_t:process { transition dyntransition siginh rlimitinh };
-allow myapp_backend_t myapp_backend_exec_t:file entrypoint;
-type_transition init_t myapp_backend_exec_t:process myapp_backend_t;
+```bash title="The entrypoint and transition declarations"
+$ sed -n '29,31p' selinux/myapp/myapp.te
+init_daemon_domain(myapp_t, myapp_exec_t)
+init_daemon_domain(myapp_backend_t, myapp_backend_exec_t)
+init_daemon_run_dir(myapp_var_run_t, "myapp")
 ```
+
+`init_daemon_domain` is a macro from the base policy. It declares the `entrypoint` allow on `myapp_exec_t` and the `type_transition` from the init domain. The module does not carry those raw rules. The macro keeps the transition tied to the base policy that defines `init_t`, and it keeps the module short.
 
 `init_t` (or `systemd`) execs `/opt/myapp/app.py`, a file labeled `myapp_exec_t`. The `entrypoint`
 allow covers this file, and the `type_transition` rule names the target type `myapp_t`. So the new
@@ -258,7 +240,7 @@ of `ps -eZ | head` is the process domain, `unconfined_t` (or `sshd_t`). The same
 looking at several views of the same concept: the type.
 
 *No host?* That is fine. You do not need one to read the chapter. `make check` reads the golden
-fixtures, and the CLI prints the same three fields for each row. See [Path A](lab.md#path-a) in
+fixtures, and the CLI prints the same three fields for each row. See [Path A](../lab.md#path-a) in
 `book/lab.md`.
 :::
 

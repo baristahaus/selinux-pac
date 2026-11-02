@@ -9,4 +9,10 @@ files_type(myapp_var_lib_t)
 init_daemon_domain(myapp_t, myapp_exec_t)
 
 allow myapp_t self:process signal;
+
+require {
+    type bin_t;
+    class file { getattr open read execute };
+}
+
 allow myapp_t bin_t:file { execute getattr open read };

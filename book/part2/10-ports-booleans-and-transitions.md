@@ -22,7 +22,7 @@ avc:  denied  { name_bind } for  pid=1234 comm="python3" src=8888
   tclass=tcp_socket permissive=1
 ```
 
-That AVC is the same tuple as the deterministic fixture under `docs/examples/fixtures/deterministic/02-port-bind/`. The generator classifies it like this:
+That AVC is the same tuple as the deterministic fixture under `tests/fixtures/deterministic/02-port-bind/`. The generator classifies it like this:
 
 ```text
 [private_port] myapp_t → unreserved_port_t:tcp_socket {name_bind}
@@ -79,16 +79,9 @@ selinux_ports:
 
 That YAML is the source of truth. Every port the application will touch (`http.port`, `http.backend.port`, any private endpoint) names a number and a protocol. It also names the private type it must carry. The same block appears in `config/shopapi.manifest.yml` for the live Spring Boot demo, where the port is 8091 and the type is `shopapi_port_t`.
 
-The template that turns the manifest into policy is a single Jinja file, `ansible/roles/selinux_pac/templates/ports_from_manifest.cil.j2`:
+The canary role turns the manifest into port state, not policy text. It reads the host's port table with `semanage port -l`, then asks `scripts/lib/app_manifest.py check-port` what to do for each entry. The helper returns `add` when the port is free, `present` when the same type already owns it, and a refusal when another type owns the port. The role runs `semanage port -a` only for `add`. It never runs `semanage port -m`, so a port that another application owns stays with that application.
 
-```jinja
-; Generated from app manifest selinux_ports (FCOS / hosts without semanage).
-{% for item in selinux_ports_list %}
-(portcon {{ item.proto | default('tcp') }} {{ item.port }} (system_u object_r {{ item.type }} ((s0) (s0))))
-{% endfor %}
-```
-
-Each row in `selinux_ports` becomes one `portcon` line. The port assignment is compiled alongside the `.te`, reviewed alongside the `.te`, and shipped alongside the `.te`. A port typed on the host does not share that review. That is why the ports block is committed.
+The port type itself is declared in the module. `selinux/myapp/myapp.te` calls `corenet_port(myapp_port_t)`, and the bind allow names that type. The number and the type stay in the manifest, so the review sees both. A port typed by hand on the host does not share that review. That is why the ports block is committed.
 
 ## Privileged ports
 
@@ -150,7 +143,7 @@ hints:
       perms: [name_connect]
 ```
 
-The `match` block is what the tool matches against: the target type, the class, the permissions. When the AVC carries those three values, the override wins before the query. When neither the override nor the query can run, generation refuses a silent direct allow. That is the same contract `docs/developers/204-DETERMINISTIC_POLICY.md` states: the host command is the final answer, not the `.te`.
+The `match` block is what the tool matches against: the target type, the class, the permissions. When the AVC carries those three values, the override wins before the query. When neither the override nor the query can run, generation refuses a silent direct allow. That is the same contract `docs/guides/201-TOOL-COMMANDS.md` states: the host command is the final answer, not the `.te`.
 
 Two fixtures report the same boolean verdict, through one path each.
 
@@ -196,7 +189,7 @@ Each of these mechanisms sits somewhere different, carries a different review, a
 | Mechanism | What it controls | Where it lives | Review impact |
 |-----------|-----------------|----------------|---------------|
 | Label (`type`) | every access to every object of that type | `.te`, compiled into the policy | adds a new type. Every allow that names it is auditable |
-| Port assignment (`portcon`) | which number each type carries on the host | manifest YAML + Ansible template, or `semanage` on the host | the number is the review. The type is the contract |
+| Port assignment (`portcon`) | which number each type carries on the host | manifest YAML + the canary role's `semanage port -a`, or `semanage` by hand | the number is the review. The type is the contract |
 | Boolean | one flag on one host, one decision | `semanage boolean -l`. `-P` persists across reboot | the operator agrees. The flag is the audit |
 | Transition | which domain a process becomes on exec | `type_transition init_t … :process …` in `.te` | the binary is the trigger. The domain is the consequence |
 
@@ -234,10 +227,10 @@ Offline, against the deterministic generator with the real flags from `cli/deter
 
 ```bash
 python3 cli/deterministic_gen.py --explain \
-  --avc-log docs/examples/fixtures/deterministic/02-port-bind/avc.log \
+  --avc-log tests/fixtures/deterministic/02-port-bind/avc.log \
   --manifest config/myapp.manifest.yml \
-  --existing-te selinux/myapp.te \
-  --existing-fc selinux/myapp.fc
+  --existing-te selinux/myapp/myapp.te \
+  --existing-fc selinux/myapp/myapp.fc
 ```
 
 Run it. The output for `02-port-bind` is the same `private_port` verdict you read above. Run it again for `04-boolean-network-connect` and you get the same boolean verdict and the same `httpd_can_network_connect` summary line: the generator does not choose the answer. It writes the same answer you write.

@@ -1,5 +1,10 @@
-# Security/platform owners for policy and Ansible.
+# Security/platform owners for policy, deploy, and the generator rules.
 # GitHub CODEOWNERS: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
 /selinux/                    @anurag-saran
 /ansible/                    @anurag-saran
+/scripts/                    @anurag-saran
+/.github/                    @anurag-saran
+/packaging/                  @anurag-saran
+/config/                     @anurag-saran
+/cli/policy_rules.py         @anurag-saran

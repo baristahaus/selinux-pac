@@ -16,8 +16,8 @@ CHECK_SYSTEMD=1
 CHECK_DOMAIN=1
 MANIFEST=""
 APP_NAME="shopapi"
-APP_DOMAIN="${SELINUX_APP_DOMAIN:-shopapi_t}"
-BACKEND_DOMAIN="${SELINUX_BACKEND_DOMAIN:-}"
+APP_DOMAIN=""
+BACKEND_DOMAIN=""
 PRIMARY_SERVICE="shopapi.service"
 BACKEND_SERVICE=""
 HAS_BACKEND=0
@@ -44,7 +44,8 @@ Wait for application systemd units and HTTP endpoints from app manifest or defau
 Verifies each service MainPID runs in the expected SELinux domain.
 
 Options:
-  --manifest PATH     App manifest YAML (default: config/\${POLICY_APP:-myapp}.manifest.yml)
+  --manifest PATH     App manifest YAML
+  --app-name NAME     App name for default manifest lookup
   --host HOST         HTTP host (overrides manifest)
   --retries N         Attempts per check (default: 15)
   --delay SEC         Seconds between attempts (default: 2)
@@ -54,10 +55,6 @@ Options:
   --app-domain TYPE   Override expected primary domain
   --backend-domain TYPE Override expected backend domain
   -h, --help          Show help
-
-Environment:
-  APP_MANIFEST        Default manifest path when --manifest omitted
-  POLICY_APP          App name for default manifest lookup (default: myapp)
 
 Exit codes:
   0  all checks passed

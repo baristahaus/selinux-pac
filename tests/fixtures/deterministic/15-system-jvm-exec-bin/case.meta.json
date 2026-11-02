@@ -1,0 +1,8 @@
+{
+  "exit_code": 1,
+  "stderr_substrings": [
+    "needs_review",
+    "corecmd_exec_bin(myapp_t)",
+    "selinux_exceptions.exec_bin"
+  ]
+}

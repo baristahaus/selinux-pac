@@ -8,12 +8,26 @@
       --max-avc {{ soak_max_avc | default(0) }} \
       --max-net-new {{ soak_max_net_new | default(0) }} \
       --show-lines {{ soak_show_lines | default(5) }} \
-      --fail-dir {{ var_dir }} \
+      --fail-dir {{ soak_marker_file | dirname }} \
       --format json \
       {{ ('--notify-webhook ' ~ (soak_notify_webhook | quote)) if (soak_notify_webhook | default('') | length) > 0 else '' }}
   register: soak_monitor_json
   changed_when: false
-  failed_when: soak_monitor_json.rc not in [0, 1]
+  failed_when: false
+
+- name: Persist daily soak result
+  ansible.builtin.shell: |
+    printf '%s' "$SOAK_JSON" | {{ selinux_ops_dir }}/record_soak_day.sh --state-dir {{ soak_marker_file | dirname }}
+  environment:
+    SOAK_JSON: "{{ soak_monitor_json.stdout | default('{\"status\":\"fail\",\"avc_fail_closed\":true,\"net_new_count\":-1,\"count\":-1}', true) }}"
+  changed_when: true
+
+- name: Fail when soak monitor crashed
+  ansible.builtin.fail:
+    msg: >-
+      Soak monitor crashed (rc={{ soak_monitor_json.rc }}).
+      Refusing to treat that as zero denials.
+  when: soak_monitor_json.rc not in [0, 1]
 
 - name: Parse soak monitor result
   ansible.builtin.set_fact:
@@ -24,18 +38,15 @@
     msg: >-
       Soak monitor failed: raw={{ soak_monitor.count }} net_new={{ soak_monitor.net_new_count }}
       (max_avc={{ soak_max_avc | default(0) }} max_net_new={{ soak_max_net_new | default(0) }}).
-      {{ soak_monitor.next_step | default('Copy ' ~ var_dir ~ '/selinux_soak_last_fail.json to rhel-qa, run dev_generate_policy.sh, open a PR. Do not semodule -i.') }}
+      {{ soak_monitor.next_step | default('Copy ' ~ (soak_marker_file | dirname) ~ '/selinux_soak_last_fail.json to rhel-qa, run dev_generate_policy.sh, open a PR. Do not semodule -i.') }}
   when: soak_monitor.status == 'fail'
 
-- name: Fail when sesearch was unavailable (raw AVC fallback is not allowed)
-  ansible.builtin.fail:
-    msg: >-
-      Soak monitor fail-closed (sesearch missing or net-new analysis failed).
-      {{ soak_monitor.fail_closed_reason | default('Install setools-console on canary/prod — it is required by selinux-policy-ops.') }}
-  when:
-    - soak_use_net_new | default(true) | bool
-    - soak_monitor.avc_fail_closed | default(false) | bool
-    - (soak_monitor.count | default(0) | int) > 0
+- name: Fail when soak monitor failed closed
+  ansible.builtin.command: >
+    {{ selinux_ops_dir }}/check_soak_gate.sh
+    --fail-closed {{ soak_monitor.avc_fail_closed | default(true) | bool | ternary('true', 'false') }}
+    --net-new {{ soak_monitor.net_new_count | default(-1) }}
+  changed_when: false
 
 - name: Soak monitor summary
   ansible.builtin.debug:

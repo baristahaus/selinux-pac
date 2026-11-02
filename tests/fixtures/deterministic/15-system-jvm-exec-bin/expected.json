@@ -1,0 +1,7 @@
+[
+  {
+    "verdict": "needs_review",
+    "tgt": "bin_t",
+    "next_action": "review_then_opt_in"
+  }
+]

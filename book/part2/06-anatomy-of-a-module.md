@@ -56,7 +56,7 @@ policy module also carries a sibling called `policy_version.txt`. The rule is
 Each module owns its own `policy_version.txt`:
 
 ```text
-selinux/policy_version.txt              → contains 1.1.3 (for myapp)
+selinux/myapp/policy_version.txt              → contains 1.1.3 (for myapp)
 selinux/shopapi/policy_version.txt      → contains 1.0.0 (for shopapi)
 selinux/payments/policy_version.txt     → contains 1.0.0 (for payments)
 ```
@@ -91,7 +91,7 @@ The RPM build (each `packaging/<module>-selinux.spec`) injects the version from
 and rerun the consistency check.
 :::::
 
-`selinux/myapp.te` is the reference module for the Order Processor demo
+`selinux/myapp/myapp.te` is the reference module for the Order Processor demo
 application, a Flask server plus a small Python backend stub. It ships two
 domains, `myapp_t` and `myapp_backend_t`, and they share a file tree under
 `/opt/myapp`, `/var/lib/myapp`, `/var/log/myapp`, and `/run/myapp`. Read it as
@@ -137,13 +137,9 @@ require {
 }
 ```
 
-`require` borrows *from* the base policy. It tells `checkmodule`: *I need these
-types and classes, even though my module does not own them.* `init_t` is the
-systemd process, the kernel's "first" process. The permissions in the list
-(`transition`, `dyntransition`, `siginh`, `rlimitinh`, `entrypoint`) are the
-ones systemd needs to start a unit as a domain. Every daemon-style module
-requires this block. Order matters, because the kernel's policy compiler reads
-the require block before it reads the rules that use it.
+`require` borrows *from* the base policy. It tells `checkmodule`: *I need these types and classes, even though my module does not own them.* `init_t` is the systemd process, the kernel's first process. The permissions in the list (`transition`, `dyntransition`, `siginh`, `rlimitinh`, `entrypoint`) are the ones systemd needs to start a unit as a domain. A daemon-style module needs this block. Order matters, because the policy compiler reads the require block before it reads the rules that use it.
+
+`selinux/myapp/myapp.te` does not write this block by hand. It calls `init_daemon_domain(myapp_t, myapp_exec_t)`, and that macro emits the require block and the rules below.
 
 ### The `type_transition` that starts the service in its own domain
 
@@ -154,11 +150,9 @@ allow myapp_t myapp_exec_t:file entrypoint;
 type_transition init_t myapp_exec_t:process myapp_t;
 ```
 
-This is the most important section of the module. It is how systemd starts the
-application *as `myapp_t`*, and not as `bin_t` (the generic type that labels
-every executable on the system). Without it, systemd starts the Java, Python,
-PHP, or other binary with whatever `bin_t` label the file carries. Then every
-`allow ... bin_t:file read;` rule is a blast radius.
+This is the most important part of the module. It is how systemd starts the application *as `myapp_t`*, and not as `bin_t` (the generic type that labels every executable on the system). Without it, systemd starts the Java, Python, PHP, or other binary with whatever `bin_t` label the file carries. Then every `allow ... bin_t:file read;` rule is a blast radius.
+
+The source file carries one macro call, `init_daemon_domain(myapp_t, myapp_exec_t)`, not the raw rules. The macro emits the entrypoint allow, the transition allow, and the `type_transition`. Read the macro call as the review point, and read the base policy macro when you need the exact permissions.
 
 - `type_transition init_t myapp_exec_t:process myapp_t;`: when `init_t`
   executes anything labeled `myapp_exec_t`, the resulting process is `myapp_t`.
@@ -172,9 +166,7 @@ PHP, or other binary with whatever `bin_t` label the file carries. Then every
   re-exec itself through the same entrypoint (used when the binary execs back
   into its own code).
 
-The same block for `myapp_backend_t` mirrors this at `/opt/myapp/backend_stub.py`
-and `/var/opt/myapp/backend_stub.py`. Every submodule gets its own
-`type_transition`. The domains do not share one.
+The same macro call for `myapp_backend_t` covers `/opt/myapp/backend_stub.py` and `/var/opt/myapp/backend_stub.py`. Every submodule gets its own `type_transition`. The domains do not share one.
 
 ### The daemon baseline
 
@@ -215,7 +207,7 @@ behind a single script.
 
 ```bash
 POLICY_MODULE=myapp SELINUX_DOMAIN=myapp_t \
-  bash scripts/compile_and_validate.sh selinux
+  bash scripts/compile_and_validate.sh selinux/myapp --app myapp
 ```
 
 That script first runs `validate_forbidden_patterns.sh selinux`, which rejects
@@ -305,10 +297,10 @@ selinux-policy-devel-38.1.75-2.el9_8.noarch
 # Compile the module with the same command compile_and_validate.sh runs
 $ cd selinux-pac
 $ POLICY_MODULE=myapp SELINUX_DOMAIN=myapp_t \
-    bash scripts/compile_and_validate.sh selinux
-[INFO] Checking forbidden patterns in selinux/myapp.te
+    bash scripts/compile_and_validate.sh selinux/myapp --app myapp
+[INFO] Checking forbidden patterns in selinux/myapp/myapp.te
 [INFO] Forbidden-pattern checks passed for myapp
-[INFO] Static checks on selinux/myapp.te
+[INFO] Static checks on selinux/myapp/myapp.te
 [INFO] Compiling myapp in selinux via refpolicy Makefile
 make -C /tmp/... -f /usr/share/selinux/devel/Makefile myapp.pp
 [INFO] Built selinux/myapp.pp

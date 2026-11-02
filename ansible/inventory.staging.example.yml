@@ -1,6 +1,6 @@
 # Copy to ansible/inventory.staging.yml when Ansible runs *on* the staging host
 # (ansible_connection: local). Two-host SSH from a laptop: use inventory.dev.yml
-# (see inventory.dev.example.yml and scripts/setup_rhel_hosts.sh).
+# (see inventory.dev.example.yml and lab/setup_rhel_hosts.sh).
 
 all:
   hosts:
@@ -8,17 +8,19 @@ all:
       ansible_connection: local
       ansible_become: true
   vars:
-    app_name: myapp
-    domain: myapp_t
-    install_root: /opt/myapp
-    var_dir: /var/lib/myapp
-    log_dir: /var/log/myapp
-    runtime_dir: /run/myapp
-    service_name: myapp.service
+    app_name: shopapi
+    domain: shopapi_t
+    install_root: /opt/shopapi
+    var_dir: /var/lib/shopapi
+    log_dir: /var/log/shopapi
+    runtime_dir: /run/shopapi
+    service_name: shopapi.service
     selinux_ops_from_package: false
     selinux_ops_dir: "{{ playbook_dir }}/../scripts"
     policy_artifact_dir: "{{ playbook_dir }}/.."
-    policy_pp_src: "{{ policy_artifact_dir }}/selinux/{{ app_name }}.pp"
+    # Set module_dir from the manifest's policy.module_dir (e.g. selinux/shopapi).
+    module_dir: "selinux/shopapi"
+    policy_pp_src: "{{ policy_artifact_dir }}/{{ module_dir }}/{{ app_name }}.pp"
     app_manifest_path: >-
       {{
         (policy_artifact_dir | dirname) ~ '/config/' ~ app_name ~ '.manifest.yml'
@@ -26,8 +28,9 @@ all:
         else policy_artifact_dir ~ '/config/' ~ app_name ~ '.manifest.yml'
       }}
     ansible_env_path: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    soak_marker_file: "{{ var_dir }}/selinux_canary_deployed_at"
+    soak_marker_file: "/var/lib/selinux-policy-ops/{{ app_name }}/selinux_canary_deployed_at"
     soak_min_days: 7
     soak_max_avc: 0
     soak_max_net_new: 0
     soak_use_net_new: true
+    selinux_pac_host_role: staging

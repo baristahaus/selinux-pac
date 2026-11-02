@@ -1,0 +1,9 @@
+policy_module(bypass, 1.0.0)
+
+type bypass_t;
+type bypass_exec_t;
+
+domain_type(bypass_t)
+files_type(bypass_exec_t)
+
+permissive bypass_t;

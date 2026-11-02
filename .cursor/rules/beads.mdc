@@ -58,7 +58,7 @@ bd dolt push                          # Sync with remote when authorized
 
 ## Context Loading
 
-Run `bd prime` to get complete workflow documentation in AI-optimized format.
+Run `bd prime` to get complete workflow documentation in agent-optimized format.
 `bd prime` is the single source of truth for operational commands and session workflow.
 
 For detailed docs: see AGENTS.md, the beads quickstart

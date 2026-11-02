@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# version.sh — Read and validate selinux/policy_version.txt (single source of truth).
+# version.sh — Read and validate selinux/MODULE/policy_version.txt (single source of truth).
 #
 # Source from other scripts:
 #   source "${SCRIPT_DIR}/lib/version.sh"
 #
 set -euo pipefail
 
-VERSION_FILE_DEFAULT="${VERSION_FILE_DEFAULT:-selinux/policy_version.txt}"
+VERSION_FILE_DEFAULT="${VERSION_FILE_DEFAULT:-selinux/myapp/policy_version.txt}"
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 
 policy_version() {

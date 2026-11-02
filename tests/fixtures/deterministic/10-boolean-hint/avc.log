@@ -1,0 +1,1 @@
+type=AVC msg=audit(1710000200.000:217): avc:  denied  { name_connect } for  pid=1234 comm="python3" scontext=system_u:system_r:httpd_t:s0 tcontext=system_u:object_r:http_port_t:s0 tclass=tcp_socket permissive=1

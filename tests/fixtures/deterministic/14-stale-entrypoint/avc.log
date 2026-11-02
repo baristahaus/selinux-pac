@@ -1,0 +1,3 @@
+type=AVC msg=audit(1710001400.000:140): avc:  denied  { entrypoint } for  pid=1401 comm="python3" path="/opt/myapp/app.py" dev="vda4" ino=1401 scontext=system_u:system_r:myapp_t:s0 tcontext=system_u:object_r:bin_t:s0 tclass=file permissive=1
+type=AVC msg=audit(1710001400.000:141): avc:  denied  { entrypoint } for  pid=1402 comm="java" path="/opt/myapp/app.py" dev="vda4" ino=1402 scontext=system_u:system_r:myapp_t:s0 tcontext=system_u:object_r:java_exec_t:s0 tclass=file permissive=1
+type=AVC msg=audit(1710001400.000:142): avc:  denied  { entrypoint } for  pid=1403 comm="python3" path="/opt/myapp/app.py" dev="vda4" ino=1403 scontext=system_u:system_r:myapp_t:s0 tcontext=system_u:object_r:usr_t:s0 tclass=file permissive=1

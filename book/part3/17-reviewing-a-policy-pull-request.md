@@ -33,8 +33,8 @@ A policy pull request in this repository carries five surfaces. Read them in thi
 | **The manifest** | `config/*.manifest.yml`: ports, file contexts, booleans, domains | the policy scope: what the module owns |
 | **The `.te`** | Type Enforcement: every `allow` rule in the module | the decisions themselves |
 | **The `.fc`** | File Contexts: every label on a path | what objects the policy names |
-| **The access delta** | `docs/examples/fixtures/policy_diff/sample_delta.md`: `sesearch` allow diff against the merge-base | what *changed* between the last release and this one |
-| **The version file** | `selinux/policy_version.txt`: SemVer | whether the bump is a symptom (policy change) or routine (build refresh) |
+| **The access delta** | `tests/fixtures/policy_diff/sample_delta.md`: `sesearch` allow diff against the merge-base | what *changed* between the last release and this one |
+| **The version file** | `selinux/myapp/policy_version.txt`: SemVer | whether the bump is a symptom (policy change) or routine (build refresh) |
 | **The refused shape** | every rule that touches `shadow_t`, `self:*`, `bin_t`, `unreserved_port_t`, `sysadm_t` | the forbidden catalogue |
 
 Each layer answers a different question. The manifest tells you what the module is supposed to own. The `.te` tells you what decisions the module will make. The `.fc` tells you what objects the policy names. The access delta tells you what changed. The version tells you whether the bump is routine or urgent. The refused shape tells you what is forbidden.
@@ -47,9 +47,9 @@ Each question catches one failure mode. Each failure mode shows up in a differen
 |---|---|---|
 | Is every new `allow` traced to an AVC line? | a rule added without evidence | access delta + AVC excerpt |
 | Are the target types specific, or a broad category? | a rule wider than the denial | `.te` + `.fc` |
-| Are ports declared in the manifest, or smuggled into the policy body? | `semanage port` as the control plane | manifest + §1 of [207-SELINUX_BEST_PRACTICES.md](docs/policy/207-SELINUX_BEST_PRACTICES.md) |
-| Is a refpolicy interface used where one exists? | raw `allow` that an interface already covers | `.te` + §1 of [207-SELINUX_BEST_PRACTICES.md](docs/policy/207-SELINUX_BEST_PRACTICES.md) |
-| Is vendor policy duplicated instead of inherited? | a custom module for JWS / EAP / httpd | manifest + §1 of [207-SELINUX_BEST_PRACTICES.md](docs/policy/207-SELINUX_BEST_PRACTICES.md) |
+| Are ports declared in the manifest, or smuggled into the policy body? | `semanage port` as the control plane | manifest + the Concepts section of [104: A module built by hand](../../docs/guides/104-HAND-BUILT-MODULE.md) |
+| Is a refpolicy interface used where one exists? | raw `allow` that an interface already covers | `.te` + the Concepts section of [104: A module built by hand](../../docs/guides/104-HAND-BUILT-MODULE.md) |
+| Is vendor policy duplicated instead of inherited? | a custom module for JWS / EAP / httpd | manifest + the Concepts section of [104: A module built by hand](../../docs/guides/104-HAND-BUILT-MODULE.md) |
 | Is there any rule the app does not actually need? | a rule added by `audit2allow` | access delta + AVC excerpt |
 | What breaks if the app is not started at all? | a rule that depends on live state | `.fc` + manifest + soak plan |
 | How is this rolled back? | a rule the admin cannot undo | admin checklist + `303-DENIAL_RESPONSE.md` |

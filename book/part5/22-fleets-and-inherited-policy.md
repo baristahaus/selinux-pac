@@ -10,7 +10,7 @@ Every service on a host sits in exactly one of three situations. The situation d
 
 | Situation | Who owns policy | What you can change | Where the evidence comes from |
 |-----------|-----------------|---------------------|---------------------------|
-| **Vendor** (JWS / EAP / httpd / named / postgresql) | the distribution or the vendor RPM | host commands (`semanage` / `setsebool` / `seport`). There is no `.te`. | `ausearch` against the vendor domain. `--tune-report` prints the host commands, never a module |
+| **Vendor** (JWS / EAP / httpd / named / postgresql) | the distribution or the vendor RPM | host commands (`semanage` / `setsebool`). There is no `.te`. | `ausearch` against the vendor domain. `--tune-report` prints the host commands, never a module |
 | **Inherited** (Tomcat you inherited at /opt/appdata, port 8090, outbound gateway) | you are allowed to tune, but you still run on a shared vendor domain | host commands plus a label on your own paths. Do not rewrite the vendor module. | `ausearch` against your own content and port, on the same vendor domain as the original install |
 | **New** (Spring Boot / shopapi / your app) | you write the module from observed AVCs | the full module. The generator refuses to generate until the pre-flight classifies `none`. | `ausearch` from a freshly confined domain. The generator applies `config/boolean_hints.yml` and `sesearch` before it writes a direct allow |
 
@@ -54,8 +54,8 @@ The flow is:
 1. **Copy the manifest template.** `cp config/payments.manifest.example.yml config/<app_name>.manifest.yml`. The template declares the required keys: `app_name`, `domain`, `paths.install_root`, `paths.var_dir`, `paths.log_dir`, `paths.runtime_dir`, and `services.primary.unit`. It also declares `http.host`, `http.port`, `http.endpoints`, and `selinux_ports`. The optional keys are `integration_tests.command`, `policy.module_dir`, and the deploy marker and report file names. Bind ports go in the committed manifest. Probe hosts change per environment.
 2. **Scaffold policy.** `bash scripts/scaffold_sepolicy_module.sh <app_name> <app_name>_t` runs `sepolicy-generate` and drops starter `.te`, `.if`, and `.fc` into `selinux/<app_name>/`. It does not overwrite reviewed policy already in git.
 3. **Validate the manifest.** `bash scripts/validate_app_manifest.sh config/<app_name>.manifest.yml`. This is what CI and Ansible rely on.
-4. **Compile.** `POLICY_MODULE=<app_name> bash scripts/compile_and_validate.sh selinux/<app_name>`. Produces `<app_name>.pp` for `semodule -i`.
-5. **Two-host lab.** `bash scripts/setup_rhel_hosts.sh write --qa-host … --prod-host …`.
+4. **Compile.** `bash scripts/compile_and_validate.sh selinux/<app_name> --app <app_name>`. Produces `<app_name>.pp` for `semodule -i`.
+5. **Two-host lab.** `bash lab/setup_rhel_hosts.sh write --qa-host … --prod-host …`.
 6. **Canary on QA** via `ansible-playbook -i ansible/inventory.dev.yml ansible/deploy_canary.yml -e app_name=<app_name> …`.
 7. **Prod canary / soak / enforce** with `-i ansible/inventory.production.yml`.
 
@@ -73,7 +73,7 @@ Two apps that share a domain share their fate. App A and App B both run on `jws6
 Nothing here commits state. On macOS or any laptop:
 
 ```bash
-bash scripts/demo_present.sh --dry-run --profile customer
+bash lab/demo_present.sh --dry-run --profile customer
 bash scripts/selinux_pac_adopt.sh doctor
 bash scripts/selinux_pac_adopt.sh init <app_name> --manifest /tmp/<app_name>.manifest.yml
 ```
@@ -97,19 +97,11 @@ A private type is the boundary that lets you audit every caller against every ca
 Calling a refpolicy `.if` is the same as calling an explicit allow. The interface names a target type and a class. The audit review is identical. If you read the `.if`, you read the allow.
 :::
 
-## Registers of applications
+## Finding the applications
 
-`config/registered_apps.example.yml` is the registry every soak loop reads against. Each entry names an `app_name` and the manifest it points to. Future tooling (`soak_exceptions_all.sh`, AAP loops) uses it to find which apps are soaking in which tiers without searching the filesystem.
+There is no separate registry file. Each application's manifest in `config/<app>.manifest.yml` is the record. The engine finds a manifest by app name through `scripts/lib/app_manifest.py resolve --app-name <app>`. The soak collector, the blast-radius classifier, and the post-deploy report all use that lookup. A new service is onboarded when its manifest lands, and every loop sees it with no second list to update.
 
-```yaml
-apps:
-  - app_name: myapp
-    manifest: config/myapp.manifest.yml
-  - app_name: payments
-    manifest: config/payments.manifest.example.yml
-```
-
-This is what keeps onboarding mechanical. When you onboard a new service, add the registry entry alongside the manifest. When you promote the manifest, you know the registry will update too. The registry does not gate anything. It names what is already standing.
+`sepac` uses the same order: `--manifest PATH` first, then `config/<app>.manifest.yml` in the policy tree, then `/etc/selinux-pac/apps/<app>.manifest.yml` on a managed host. The Ansible role copies the reviewed manifest to `/etc/selinux-pac/apps/`, so the host and the pull request read the same file.
 
 ## Scaling the pipeline
 
@@ -119,7 +111,7 @@ Adding a new app to the pipeline touches five things. Four of them are configura
 |--------|--------------|----------------------|
 | Manifest (`config/<app>.manifest.yml`) | a new entry: bind ports, units, probes, domains | the format. Every manifest consumes the same keys |
 | Generator pre-flight | it runs again for the new service, with the vendor/base classification | the six-situation table. The same situations apply |
-| Policy CI | one added line per app in `.github/workflows/selinux-policy-ci.yml`: `POLICY_MODULE=<app> SELINUX_DOMAIN=<app>_t bash scripts/validate_forbidden_patterns.sh selinux/<app>` | the gate script and its twelve refusals. The workflow does not discover module directories by itself |
+| Policy CI | one added line per app in `.github/workflows/selinux-policy-ci.yml`: `bash scripts/validate_forbidden_patterns.sh selinux/<app> --app <app>` | the gate script and its twelve refusals. The workflow does not discover module directories by itself |
 | RPM set | one new `<app>-selinux` RPM per service | the packaging pipeline: `packaging/build_rpms.sh` and AAP |
 | Inventory | `ansible/inventory.dev.yml` / `inventory.production.yml` grow a host entry | the Ansible role schema. `selinux_pac` loads the same manifest keys |
 

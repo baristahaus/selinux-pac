@@ -37,7 +37,7 @@ from policy_rules import (  # noqa: E402
     VERDICT_PORT,
     VERDICT_TOOLCHAIN,
 )
-from selinux_gen import parse_avc_line  # noqa: E402
+from avc_parse import parse_avc_line  # noqa: E402
 
 TUNE_VERDICTS = frozenset({VERDICT_FC, VERDICT_FC_DRIFT, VERDICT_BOOLEAN, VERDICT_PORT})
 UNRESOLVABLE_VERDICTS = frozenset(

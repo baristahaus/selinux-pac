@@ -1,0 +1,7 @@
+[
+  {
+    "verdict": "interface",
+    "tgt": "bin_t",
+    "next_action": "update_te_allow"
+  }
+]

@@ -1,0 +1,14 @@
+policy_module(bypass, 1.0.0)
+
+type bypass_t;
+type bypass_exec_t;
+
+domain_type(bypass_t)
+files_type(bypass_exec_t)
+
+# On RHEL 9 java_exec_t is an alias of bin_t. The text never says bin_t,
+# but the compiled rule is execute on bin_t.
+require {
+	type java_exec_t;
+}
+can_exec(bypass_t, java_exec_t)

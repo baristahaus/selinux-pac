@@ -1,46 +1,45 @@
 # The Gates in CI
 
-> Every PR that touches `selinux/` runs two static checks before a human opens it. The gates refuse two mistakes that the generator cannot stop. The first is a wildcard allow that compiles but breaks a host. The second is a version drift that makes the RPM and the compiled module disagree.
+> Every PR runs four jobs before a human opens it. Two jobs need no SELinux host: the offline suite and the version check. The other two use a policy toolchain in a container. The jobs refuse a wildcard allow that compiles but breaks a host, a version drift between the RPM and the module, a semantic hole in the compiled policy, and a regression in the offline suite.
 
 ## Why CI is here at all
 
 A policy change arrives on a `pull_request` from a developer's laptop. The generator already shaped it: `dev_generate_policy.sh --apply` writes the `.te` and `.fc`, bumps `policy_version.txt`, and the developer ran `validate_forbidden_patterns.sh` locally.
 
-But the developer did not compile it. That happens only on rhel-qa, where `selinux-policy-devel` is installed and the admin owns the host. A CI check must make sure that the generator did not introduce the patterns it already warned about. It must also make sure that the single source of truth for the policy version still lines up. A non-host workflow asserts only those two invariants.
+But the developer did not compile it. That happens only on rhel-qa, where `selinux-policy-devel` is installed and the admin owns the host. Two host-free jobs assert the shape and the version. A third job compiles the policy in a container and searches it. A fourth job runs the offline suite.
 
 The admin on rhel-qa checks everything else: syntax correctness, missing allows, and a dontaudit surprise.
 
 ::: why Why a host-free workflow is worth having
-The two checks that need no host catch the two failures a generator can hide: a forbidden shape that came back, and a version that moved in one file only. Both cost one assert to write and a review cycle to find.
+The checks that need no host catch the failures a generator can hide: a forbidden shape that came back, and a version that moved in one file only. Both cost one assert to write and a review cycle to find.
 :::
 
 ## What CI may do and what it must never do
 
-The workflow [`.github/workflows/selinux-policy-ci.yml`](repo:.github/workflows/selinux-policy-ci.yml) runs on `runs-on: ubuntu-latest`. The runner has bash and git. It has no SELinux kernel, no `audit.log`, no `semodule`, no `/var/lib/selinux`, and no production credentials. The boundary is:
+The workflow [`.github/workflows/selinux-policy-ci.yml`](repo:.github/workflows/selinux-policy-ci.yml) has four jobs. `offline-tests`, `forbidden-patterns`, and `version-consistency` run on `ubuntu-latest`. `compiled-policy` runs in a `quay.io/centos/centos:stream9` container, or on the `rhel9-utm` runner when the repository variable selects it. No job has a production inventory or production credentials. The boundary is:
 
 | Can | Must never |
 |---|---|
-| `grep` the `.te` / `.fc` against shape patterns | Load a compiled `.pp` into any policy engine |
-| parse `policy_version.txt` against a SemVer regex | Inspect or read any AVC file |
-| compare `policy_module(...)` in `.te` to the version line | Execute any RHEL playbook |
-| report pass / fail as a status check | install, load, or remove policy modules |
+| `grep` the `.te` / `.fc` against shape patterns | Load a module into the live kernel |
+| parse `policy_version.txt` against a SemVer regex | Inspect or read any AVC file from production |
+| compare `policy_module(...)` in `.te` to the version line | Execute a playbook against production |
+| compile and search a throwaway policy store | install, load, or remove policy modules on a managed host |
 
-The companion [`.github/workflows/demo-estate.yml`](repo:.github/workflows/demo-estate.yml) tells a different story. It has a `shopapi-policy` job that runs in a `fedora:41` container and installs the compile toolchain (`dnf install -y selinux-policy-devel make python3`). That container compiles a `.pp`. It never loads it into a running kernel. It stops at `make`. It never touches `audit.log`, and it never touches the production inventory. Note what that install list does not contain: `setools-console`. The compile path needs no `sesearch`. That is why a missing `sesearch` is a soak-gate condition and not a CI one.
+The `compiled-policy` job installs `selinux-policy-devel`, `setools-console`, and `audit`. It compiles the three modules and runs `scripts/validate_policy_semantics.sh` against a throwaway copy of the policy store. It then compiles every bypass fixture with `scripts/reject_compiled_bypasses.sh`. A module that compiles but grants a forbidden access fails the job. The separate [`.github/workflows/demo-estate.yml`](repo:.github/workflows/demo-estate.yml) uses the same image for its `shopapi-policy` job.
 
-That Fedora job is the only place in GitHub Actions that touches the policy toolchain. Every other job stays in bash-only territory. A separate file owns the compile path for one reason: the policy-compile job needs a `fedora:41` container, because `selinux-policy-devel` is a Fedora package. The other jobs do not.
-
-## The two static gates
+## The four jobs
 
 ### `forbidden-patterns`
 
-[`.github/workflows/selinux-policy-ci.yml`](repo:.github/workflows/selinux-policy-ci.yml) invokes the script exactly twice per trigger:
+[`.github/workflows/selinux-policy-ci.yml`](repo:.github/workflows/selinux-policy-ci.yml) invokes the script three times per trigger, once per module:
 
 ```bash
-bash scripts/validate_forbidden_patterns.sh selinux
-POLICY_MODULE=shopapi SELINUX_DOMAIN=shopapi_t bash scripts/validate_forbidden_patterns.sh selinux/shopapi
+bash scripts/validate_forbidden_patterns.sh selinux --app myapp
+bash scripts/validate_forbidden_patterns.sh selinux/shopapi --app shopapi
+bash scripts/validate_forbidden_patterns.sh selinux/payments --app payments
 ```
 
-The first call covers the default `myapp` module on the repo root. The second call covers `selinux/shopapi`, and `POLICY_MODULE` / `SELINUX_DOMAIN` set its names. Those two calls are the whole coverage. The repository tracks `selinux/payments`, but the job does not pass it to the gate. So a third module needs a third line in the job. Nothing discovers `selinux/*/` on its own.
+Each call names the policy directory and the app. The job then runs `python3 cli/policy_audit.py --selinux-dir selinux`, which checks `dontaudit` rules and file-context paths. Those calls are the whole coverage. A fourth module needs a fourth line in the job. Nothing discovers `selinux/*/` on its own.
 
 `validate_forbidden_patterns.sh` runs on any machine with bash and Python 3: a laptop, a CI runner, or rhel-qa. It does not need a SELinux host. It returns 0 only when every test passes. Each `check_fail` call prints one specific error and sets `fail=1`.
 
@@ -61,13 +60,13 @@ An eighth check loops over the three high-privilege target types. The remaining 
 | 9 | `var_t:file` with `write` on the target side | Broad `var_t:file` write, which covers every system file |
 | 10 | Missing `policy_module` in the file | No module declaration at all |
 | 11 | Missing `${SELINUX_DOMAIN}` in the file | The file never mentions the domain |
-| 12 | A path/type token missing from `.fc` (except `myapp_canary` for the FCOS permissive overlay) | A path or dedicated type (`*_exec_t`, `*_var_lib_t`) is absent from the file-contexts file |
+| 12 | A path/type token missing from `.fc` | A path or dedicated type (`*_exec_t`, `*_var_lib_t`) is absent from the file-contexts file |
 
-**How to fix a failure:** read the error line. Then remove the offending allow from `.te`, add the dedicated type to `.fc`, or update the module declaration. `MODULE_NAME != "myapp_canary"` skips that branch, when a path is out of scope. The FCOS permissive overlay on `myapp_canary` is one such path.
+**How to fix a failure:** read the error line. Then remove the offending allow from `.te`, add the dedicated type to `.fc`, or update the module declaration.
 
 ### `version-consistency`
 
-The second job runs `scripts/validate_version_consistency.sh` once. That script is the single source of truth check. Each policy module has a version line in `policy_version.txt`. That line must match the version inside `policy_module(<module>, …)` in the matching `.te`. Every RPM spec that ships the module must read the version from that file, through `--define "modver ${VERSION}"`.
+The `version-consistency` job runs `scripts/validate_version_consistency.sh` once. That script is the single source of truth check. Each policy module has a version line in `policy_version.txt`. That line must match the version inside `policy_module(<module>, …)` in the matching `.te`. Every RPM spec that ships the module must read the version from that file, through `--define "modver ${VERSION}"`.
 
 The script runs `source` on `scripts/lib/version.sh`, which supplies two functions. `policy_version` reads the file and checks that it holds a SemVer. `policy_module_version_from_te` extracts the SemVer from the first `policy_module(<app>, …)` line.
 
@@ -78,7 +77,7 @@ Two drift directions each produce an error:
 | `.te` version out-of-sync with `policy_version.txt` | `validate_version_consistency: <module>: policy_version.txt (<canonical>) != policy_module in <module>.te (<from_te>)` | The source of truth is the file. The `.te` must read from it, not carry its own copy. |
 | RPM spec ignoring `%{modver}` | `validate_version_consistency: <module>: <spec_file> must use 'Version: %{modver}'` | The RPM must derive its version from the single source, not hard-code a number. |
 
-The script iterates every `policy_version.txt` under `selinux/`. Each per-application module has its own copy under `selinux/<module>/`. The root-level `selinux/policy_version.txt` is the default for the top-level `myapp` module. The script also checks the single `define "modver ${VERSION}"` entry in `packaging/build_rpms.sh`. If that line is missing, the whole RPM pipeline is broken.
+The script iterates every `policy_version.txt` under `selinux/`. Each application module has its own copy under `selinux/<module>/`, including `selinux/myapp/policy_version.txt`. There is no top-level file. The script also checks the single `define "modver ${VERSION}"` entry in `packaging/build_rpms.sh`. If that line is missing, the whole RPM pipeline is broken.
 
 **How to fix a failure:** align the version in `.te` with the line in `policy_version.txt`, or replace a hardcoded `Version:` in the spec with `Version: %{modver}`. Note the shape of the loop. It walks the `policy_version.txt` files that exist, so the script skips a module directory with no version file instead of flagging it. Put a `policy_version.txt` in every module directory, and the check covers it from then on.
 
@@ -95,7 +94,7 @@ Soak duration is not uniform. A module that adds one rule on a module-private ty
    - **medium** when the rule touches a refpolicy interface or any other non-module target type.
 3. The classifier's `main()` prints one JSON blob with `tier`, `min_days`, `reason`, a `sediff_excerpt` (first 2000 characters of the diff), and `fail_closed`. That blob is the answer `check_soak_ready.sh --auto-tier` reads.
 
-The fixtures lock the tier logic. They live under `tests/fixtures/blast_radius/`, and [`docs/admin/302-PRODUCTION_READINESS.md`](repo:docs/admin/302-PRODUCTION_READINESS.md) references that path. Every verdict has a golden row, and `make test-fixtures` runs them. If you change the tier rules, you must update the fixtures.
+The fixtures lock the tier logic. They live under `tests/fixtures/blast_radius/`, and [`docs/shipping.md`](repo:docs/shipping.md) references that path. Every verdict has a golden row, and `make test-fixtures` runs them. If you change the tier rules, you must update the fixtures.
 
 ## The PR comment
 
@@ -146,16 +145,16 @@ The `labels` in the YAML header (`security`, `selinux`, `pending-admin-review`) 
 
 The `demo-estate.yml` workflow is not a security gate. It is a smoke run of the three-app demo, and it needs no RHEL host. The job does this:
 
-1. dry-runs `demo_present.sh --dry-run --no-type --auto --profile customer` and `--profile technical` to check that the narration still lines up,
-2. syntax-checks the shell scripts,
-3. checks that `shopapi.te` has no guessed JVM allows (`allow … (execmem|execstack|dac_override)`),
+1. dry-runs `lab/demo_present.sh --dry-run --no-type --auto --profile customer` and `--profile technical` to check that the narration still lines up,
+2. syntax-checks `lab/demo_bootstrap.sh`, `lab/demo_present.sh`, and `lab/lib/demo_estate.sh`,
+3. checks that `selinux/shopapi/shopapi.te` has no guessed JVM allows (`allow … (execmem|execstack|dac_override)`),
 4. runs `validate_version_consistency.sh`,
-5. packages the Spring Boot JAR (`mvn -q -DskipTests -f demo/shopapi/pom.xml package`),
-6. compiles the `shopapi` policy inside a `fedora:41` container by installing `selinux-policy-devel` and running `compile_and_validate.sh`.
+5. packages the Spring Boot JAR (`mvn -q -DskipTests -f lab/apps/shopapi/pom.xml package`),
+6. compiles the `shopapi` policy in a `quay.io/centos/centos:stream9` container by installing `selinux-policy-devel` and running `compile_and_validate.sh`.
 
 The container keeps no state between runs. Each run starts with a fresh `dnf install` and ends with a built `.pp` that nothing installs. This is not a production environment, a security gate, or a substitute for `validate_policy_semantics.sh`. It is a build.
 
-`selinux-policy-devel` is a Fedora package, and `dnf` is the only way to install it on a GitHub-hosted Ubuntu box. Every other policy-compile run still goes to rhel-qa.
+`selinux-policy-devel` is a CentOS Stream package, and `dnf` is the only way to install it in the container. Every other policy-compile run still goes to rhel-qa.
 :::
 ::: try Run the gates locally
 
@@ -163,8 +162,7 @@ Nothing here requires a host. Take a fresh clone of `selinux-pac` on your laptop
 
 ```bash
 $ cp -r selinux/shopapi /tmp/shopapi-gate-check
-$ POLICY_MODULE=shopapi SELINUX_DOMAIN=shopapi_t \
-    bash scripts/validate_forbidden_patterns.sh /tmp/shopapi-gate-check
+$ bash scripts/validate_forbidden_patterns.sh /tmp/shopapi-gate-check --app shopapi
 [INFO] Checking forbidden patterns in /tmp/shopapi-gate-check/shopapi.te
 [INFO] Forbidden-pattern checks passed for shopapi
 ```
@@ -173,8 +171,7 @@ The module passes, because the gate is not there to catch a module that someone 
 
 ```bash
 $ echo 'allow shopapi_t *:file read;' >> /tmp/shopapi-gate-check/shopapi.te
-$ POLICY_MODULE=shopapi SELINUX_DOMAIN=shopapi_t \
-    bash scripts/validate_forbidden_patterns.sh /tmp/shopapi-gate-check
+$ bash scripts/validate_forbidden_patterns.sh /tmp/shopapi-gate-check --app shopapi
 [INFO] Checking forbidden patterns in /tmp/shopapi-gate-check/shopapi.te
 [ERROR] Wildcard object type in allow rule
 ```
@@ -183,32 +180,30 @@ It exits 1. Remove the line, and the gate is green again:
 
 ```bash
 $ sed -i '/allow shopapi_t \*:file read;/d' /tmp/shopapi-gate-check/shopapi.te
-$ POLICY_MODULE=shopapi SELINUX_DOMAIN=shopapi_t \
-    bash scripts/validate_forbidden_patterns.sh /tmp/shopapi-gate-check
+$ bash scripts/validate_forbidden_patterns.sh /tmp/shopapi-gate-check --app shopapi
 [INFO] Forbidden-pattern checks passed for shopapi
 ```
 
-Both runs must set `POLICY_MODULE` and `SELINUX_DOMAIN`. Without them, the script looks for `myapp.te` and fails with `[ERROR] Missing /tmp/shopapi-gate-check/myapp.te`. That error is about a different module.
+Each run passes `--app shopapi`, so the script uses `shopapi_t` as the domain. Without `--app`, the script takes the first `.te` name in the directory.
 
 Then break the second rule on purpose: the version line. This check reads the files of the repository itself, so edit the tracked module. Undo the change with `git` afterwards:
 
 ```bash
 $ sed -i 's/policy_module(shopapi, 1\.0\.0)/policy_module(shopapi, 0.0.999)/' selinux/shopapi/shopapi.te
 $ bash scripts/validate_version_consistency.sh
-validate_version_consistency: payments OK (1.0.0)
 validate_version_consistency: myapp OK (1.1.3)
+validate_version_consistency: payments OK (1.0.0)
 validate_version_consistency: shopapi: /path/to/selinux-pac/selinux/shopapi/policy_version.txt (1.0.0) != policy_module in /path/to/selinux-pac/selinux/shopapi/shopapi.te (0.0.999)
-validate_version_consistency: shopapi OK (1.0.0)
 $ git checkout -- selinux/shopapi/shopapi.te
 ```
 
-(That trailing `OK` after an error is the shape of the script. It always prints the module line, and it counts the error. The exit code does the gating.)
+(The script prints one line per module and exits 1 on the mismatch. The exit code does the gating.)
 
 It exits 1, and the message names both files by absolute path. `git checkout` restores the real version. Run the check once more, and both gates pass again. Each check is one command, and they are the same commands that CI runs.
 :::
 
 ## What you can do now
-- Open a PR against `selinux/` and watch `forbidden-patterns` + `version-consistency` run without a SELinux host.
+- Open a PR against `selinux/` and watch the host-free jobs run without a SELinux host.
 - Break the wildcard-pattern rule on purpose, and check that the error message matches the table above.
 - Break the version-drift rule and make sure that the single-source-of-truth check rejects the drift in both directions.
 - Read the PR comment that `post_pr_policy_diff_comment.sh` writes on a real PR. Look for `Rules ADDED` / `Rules REMOVED` for your module.

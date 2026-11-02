@@ -1,0 +1,13 @@
+policy_module(bypass, 1.0.0)
+
+require {
+	class capability { sys_admin sys_module };
+}
+
+type bypass_t;
+type bypass_exec_t;
+
+domain_type(bypass_t)
+files_type(bypass_exec_t)
+
+allow bypass_t self:capability { sys_admin sys_module };

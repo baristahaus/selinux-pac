@@ -71,7 +71,7 @@ the `name_bind` allow, and the port's type tells the answer.
 
 | Command | What it tells you or changes | Needs |
 |---|---|---|
-| `semanage port -a/-m/-d/-l` | Add, modify, delete, or list port type definitions. The repository drives its port registrations from the manifest's `selinux_ports` (Ansible `seport`, or the packaged `ports_from_manifest.cil` where `semanage` is absent). `semanage port -a` is the command you run by hand to inspect or repair, not the one the pipeline uses on production | `rhel host`, `root` |
+| `semanage port -a/-m/-d/-l` | Add, modify, delete, or list port type definitions. The canary role reads `semanage port -l`, then runs `scripts/lib/app_manifest.py check-port` for each `selinux_ports` entry. It runs `semanage port -a` only when the helper returns `add`, and it never runs `semanage port -m`. Use the command by hand to inspect or repair a host | `rhel host`, `root` |
 
 ## Booleans
 
@@ -153,16 +153,16 @@ no guessed defaults.
 | Command | What it tells you or changes | Needs |
 |---|---|---|
 | `make check` | Offline health check: `test` (fixtures + static + smoke), `lint`, `book-check`. No SELinux host is required, but the `deps` step wants `pip3`, and the linters skip themselves when absent | `laptop` |
-| `make test-fixtures` | Runs `scripts/run_deterministic_fixtures.sh`, `scripts/run_deterministic_payments_check.sh`, `scripts/run_blast_radius_fixtures.sh`, and `scripts/run_tune_report_fixtures.sh` | `laptop` |
+| `make test-fixtures` | Runs `tests/run_deterministic_fixtures.sh`, `tests/run_deterministic_payments_check.sh`, `tests/run_blast_radius_fixtures.sh`, and `tests/run_tune_report_fixtures.sh` | `laptop` |
 | `make book` | Builds the HTML manual into `site/` via `python3 tools/book/build.py` | `laptop` |
 | `make book-check` | Checks the manual (internal links, anchors, `repo:` references) via `python3 tools/book/build.py --check` | `laptop` |
 | `bash scripts/dev_generate_policy.sh` | Developer self-service: export AVCs → run `cli/deterministic_gen.py` → generate policy → diff → promote into `selinux/`. It supports `--apply`, `--tune-report`, `--force REASON`, `--allow-needs-review`, `--skip-export`, `--open-pr` | `build host` (for promote) / `laptop` (for explain) |
-| `bash scripts/setup_rhel_hosts.sh doctor` | `getenforce`, `ausearch`, and `sesearch` probes on each RHEL host, configured in `inventory.dev.yml` and `inventory.production.yml` | `rhel host`, `root` |
+| `bash lab/setup_rhel_hosts.sh doctor` | `getenforce`, `ausearch`, and `sesearch` probes on each RHEL host, configured in `inventory.dev.yml` and `inventory.production.yml` | `rhel host`, `root` |
 | `ansible-playbook` (canary) / `ansible-playbook` (soak) | Deploys the canary module (`part4/19-canary-soak-enforce.md`) or runs the daily soak monitor. `soak_monitor.yml` calls `monitor_avc.sh --manifest … --max-net-new …`, and `soak_status.yml` calls `collect_soak_facts.sh`. (`check_soak_ready.sh` is the host-side CLI for the same checks. The role itself runs `collect_soak_facts.sh`) | `controller`, `rhel host` |
 
 ::: note `make test-fixtures` is the smoke test for the generator
 Because every classification verdict has at least one golden fixture under
-`docs/examples/fixtures/deterministic/`, this target catches drift before it ships.
+`tests/fixtures/deterministic/`, this target catches drift before it ships.
 A failing fixture is the same signal as a failing test: CI fails, and the PR is blocked.
 :::
 
@@ -171,6 +171,6 @@ A failing fixture is the same signal as a failing test: CI fails, and the PR is 
 - Pick one host, and run `getenforce`, `sestatus`, `id -Z`, and `ls -Z /var`. You now own the
   four slices of truth that each command answers.
 - Find a mislabeled file: `matchpathcon` against `restorecon` against `semanage fcontext -l`.
-- Compile a policy module: `bash scripts/compile_and_validate.sh selinux` on the build host.
+- Compile a policy module: `bash scripts/compile_and_validate.sh selinux/myapp --app myapp` on the build host.
 - Read an AVC, suggest an allow, and write a diff: `bash scripts/dev_generate_policy.sh --skip-export --app-name <app>`.
 - Gate a dangerous rule: `make test-fixtures`. If your verdict has no golden row, the fixture is missing.

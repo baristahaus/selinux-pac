@@ -4,26 +4,9 @@ hints:
   - boolean: httpd_can_network_connect
     note: >-
       Site policy: prefer toggling this boolean over a permanent allow on http_port_t
-      for outbound HTTP connects.
+      for outbound HTTP connects. httpd only. Never apply this to Tomcat.
     match:
-      tgt_type: http_port_t
-      tclass: tcp_socket
-      perms: [name_connect]
-  - boolean: tomcat_can_network_connect
-    note: >-
-      Tomcat outbound HTTP is gated by this boolean. Enable it on the host;
-      do not generate a .te allow that duplicates vendor policy.
-    match:
-      src_type: tomcat_t
-      tgt_type: http_port_t
-      tclass: tcp_socket
-      perms: [name_connect]
-  - boolean: jws6_can_network_connect
-    note: >-
-      JWS outbound HTTP is gated by this boolean. Enable it on the host;
-      do not generate a .te allow that duplicates vendor policy.
-    match:
-      src_type: jws6_tomcat_t
+      src_type: httpd_t
       tgt_type: http_port_t
       tclass: tcp_socket
       perms: [name_connect]

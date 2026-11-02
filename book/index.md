@@ -78,7 +78,7 @@ make deps && make check
 `make check` is the spine of the book. It runs the deterministic generator against golden
 fixtures, checks the app manifests, and lints the policy. It needs no SELinux host. Once
 `make deps` installs the Python requirements, it needs no network. If a chapter claims a
-behavior, a fixture under `docs/examples/fixtures/deterministic/` usually proves it.
+behavior, a fixture under `tests/fixtures/deterministic/` usually proves it.
 
 ## How to read this book
 

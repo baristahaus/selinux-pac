@@ -33,7 +33,7 @@ what distinguishes those pairs.
 
 The generator emits `baseline` when the denial is already covered by a reviewed macro in the existing `.te`. No allow line is written.
 
-**The AVC from `docs/examples/fixtures/deterministic/05-baseline-covered/avc.log`:**
+**The AVC from `tests/fixtures/deterministic/05-baseline-covered/avc.log`:**
 
 ```text
 type=AVC msg=audit(1710000180.000:213): avc:  denied  { read open getattr }
@@ -66,7 +66,7 @@ Both verdicts address a mislabeled file. The distinction is structural:
 - **`fc_fix`** means the `.fc` is *missing* a line for this path. The generator writes a `gen_context` line into the `.fc`.
 - **`fc_drift`** means the `.fc` *already* covers the path with a different regex. The label on disk drifted away from the regex. No `.te` or `.fc` change is needed. Only `restorecon`.
 
-**`fc_fix`:** from `docs/examples/fixtures/deterministic/06-fc-missing-line/avc.log`:
+**`fc_fix`:** from `tests/fixtures/deterministic/06-fc-missing-line/avc.log`:
 
 ```text
 type=AVC msg=audit(1710000160.000:211): avc:  denied  { write } for
@@ -86,9 +86,9 @@ tclass=file permissive=1
 ]
 ```
 
-`suggest_fc_type` walks the manifest's `paths` hints in order: `log_dir` → `{app}_log_t`, `var_dir` → `{app}_var_lib_t`, `runtime_dir` → `{app}_var_run_t`, `install_root` → `{app}_exec_t`. Then it falls back to `extra_fc_roots` for `{app}_var_lib_t`. `/opt/myapp/cache/data` sits under `install_root`, so the generator writes `gen_context(system_u:object_r:myapp_exec_t,s0)` into the `.fc` for that path. The operator then runs `restorecon -Rv /opt/myapp/cache/data` on the host. (The artifact is in `docs/examples/fixtures/deterministic/06-fc-missing-line/_out/`: `findings.json` and the generated `myapp.fc`.)
+`suggest_fc_type` walks the manifest's `paths` hints in order: `log_dir` → `{app}_log_t`, `var_dir` → `{app}_var_lib_t`, `runtime_dir` → `{app}_var_run_t`, `install_root` → `{app}_exec_t`. Then it falls back to `extra_fc_roots` for `{app}_var_lib_t`. `/opt/myapp/cache/data` sits under `install_root`, so the generator writes `gen_context(system_u:object_r:myapp_exec_t,s0)` into the `.fc` for that path. The operator then runs `restorecon -Rv /opt/myapp/cache/data` on the host. (The artifact is in `tests/fixtures/deterministic/06-fc-missing-line/_out/`: `findings.json` and the generated `myapp.fc`.)
 
-**`fc_drift`:** from `docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log`:
+**`fc_drift`:** from `tests/fixtures/deterministic/01-mislabeled-var-lib/avc.log`:
 
 ```text
 type=AVC msg=audit(1710000100.000:200): avc:  denied  { write } for
@@ -117,7 +117,7 @@ A generic port (`unreserved_port_t`, `reserved_port_t`, `ephemeral_port_t`, `por
 `interface` (`corenet_tcp_bind_generic_node` / `corenet_udp_bind_generic_node`). The fix there is
 a refpolicy interface rather than a private port.
 
-**From `docs/examples/fixtures/deterministic/02-port-bind/avc.log`:**
+**From `tests/fixtures/deterministic/02-port-bind/avc.log`:**
 
 ```text
 type=AVC msg=audit(1710000150.000:210): avc:  denied  { name_bind } for
@@ -139,7 +139,7 @@ tclass=tcp_socket permissive=1
 ]
 ```
 
-The generator writes `allow myapp_t myapp_port_t:tcp_socket name_bind;` into the `.te` and instructs the operator to add `port: 8888 / tcp / myapp_port_t` to `selinux_ports` in `config/myapp.manifest.yml`. The manifest's `selinux_ports` list drives the `seport` canary that registers the port with semanage. No `semanage port -a` on production.
+The generator writes `allow myapp_t myapp_port_t:tcp_socket name_bind;` into the `.te` and instructs the operator to add `port: 8888 / tcp / myapp_port_t` to `selinux_ports` in `config/myapp.manifest.yml`. The manifest's `selinux_ports` list drives the canary's `semanage port -a` step. No `semanage port -a` on production.
 
 ## boolean
 
@@ -148,7 +148,7 @@ A `setsebool` decision that is *not* shipped in the policy module package. The g
 does not answer it, the generator falls back to a `sesearch` query against `policy.kern`.
 `cli/boolean_hints.py` is the module that runs that query and parses the result.
 
-**From `docs/examples/fixtures/deterministic/04-boolean-network-connect/avc.log`:**
+**From `tests/fixtures/deterministic/04-boolean-network-connect/avc.log`:**
 
 ```text
 type=AVC msg=audit(1710000200.000:217): avc:  denied  { name_connect } for
@@ -169,13 +169,13 @@ tclass=tcp_socket permissive=1
 ]
 ```
 
-Same AVC, different configuration in `docs/examples/fixtures/deterministic/10-boolean-hint/`: the curated override in `config/boolean_hints.yml` is consulted first, and the outcome is identical (`boolean`, `http_port_t`, `httpd_can_network_connect`). The operator runs `setsebool httpd_can_network_connect on` on the host. The policy module package never carries it.
+Same AVC, different configuration in `tests/fixtures/deterministic/10-boolean-hint/`: the curated override in `config/boolean_hints.yml` is consulted first, and the outcome is identical (`boolean`, `http_port_t`, `httpd_can_network_connect`). The operator runs `setsebool httpd_can_network_connect on` on the host. The policy module package never carries it.
 
 ## interface
 
 A refpolicy interface already shipped for this exact need. The generator invokes `try_sepolgen_interface` against the host's installed interfaces. When the mock is configured, the test exercises that path without `sepolgen-ifgen`.
 
-**From `docs/examples/fixtures/deterministic/08-interface-match/avc.log`:**
+**From `tests/fixtures/deterministic/08-interface-match/avc.log`:**
 
 ```text
 type=AVC msg=audit(1710000195.000:215): avc:  denied  { search } for
@@ -204,7 +204,7 @@ Two flavours:
 1. **`direct`**: the target is a private type inside the module (`myapp_port_t`, `myapp_var_lib_t`, etc.). The generator writes an explicit `allow src type:tclass { perms };` (or a pattern macro when the perms qualify).
 2. **`direct`**: sepolgen ran but no refpolicy interface matched. The generator writes an explicit allow anyway and marks the engine as `house_rules`.
 
-**`direct` (private type), from `docs/examples/fixtures/deterministic/11-private-getopt/avc.log`:**
+**`direct` (private type), from `tests/fixtures/deterministic/11-private-getopt/avc.log`:**
 
 ```text
 type=AVC msg=audit(1710000170.000:212): avc:  denied  { getopt } for
@@ -226,7 +226,7 @@ tclass=tcp_socket permissive=1
 
 The target is `myapp_port_t`, which `private_types()` identifies as in-module. The generator emits `allow myapp_t myapp_port_t:tcp_socket getopt;`.
 
-**`direct` (no interface), from `docs/examples/fixtures/deterministic/09-direct-no-interface/avc.log`:**
+**`direct` (no interface), from `tests/fixtures/deterministic/09-direct-no-interface/avc.log`:**
 
 ```text
 type=AVC msg=audit(1710000198.000:216): avc:  denied  { read open getattr } for
@@ -252,7 +252,7 @@ tclass=file permissive=1
 
 sepolgen is missing on the host, so the generator refuses a raw allow on a base type.
 
-**From `docs/examples/fixtures/deterministic/07-toolchain-required/avc.log`:**
+**From `tests/fixtures/deterministic/07-toolchain-required/avc.log`:**
 
 ```text
 type=AVC msg=audit(1710000190.000:214): avc:  denied  { search } for
@@ -299,7 +299,7 @@ at the flag, so the exit stays `1`. That is fixture `07-toolchain-required`, who
 
 A target type whose allow is held to be too wide for an app domain. `FORBIDDEN_TARGET_TYPES` (in `cli/policy_rules.py`) enumerates the six types: `shadow_t`, `unconfined_t`, `sysadm_t`, `security_t`, `selinux_config_t`, `passwd_file_t`.
 
-**From `docs/examples/fixtures/deterministic/03-shadow-read/avc.log`:**
+**From `tests/fixtures/deterministic/03-shadow-read/avc.log`:**
 
 ```text
 type=AVC msg=audit(1710000200.000:201): avc:  denied  { read open } for
@@ -333,7 +333,7 @@ The generator refuses the allow, prints `REFUSED` on stderr, and returns `1`. No
 
 A domain-weakening permission. The generator classifies each (tclass, perm) pair against `NEEDS_REVIEW_RULES` in `cli/policy_rules.py`. The verdict records what the allow does, why it weakens the domain, and what the alternatives are. The allow is *not* written to the `.te` unless the operator passes `--allow-needs-review` (or the repeatable `--allow-needs-review-perm execmem`).
 
-**From `docs/examples/fixtures/deterministic/12-execmem-review/avc.log`:**
+**From `tests/fixtures/deterministic/12-execmem-review/avc.log`:**
 
 ```text
 type=AVC msg=audit(1710000300.000:301): avc:  denied  { execmem } for
@@ -417,26 +417,26 @@ When you read a finding, the first question is *what did the generator write int
 cd selinux-pac
 
 python3 cli/deterministic_gen.py --explain \
-  --avc-log docs/examples/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
+  --avc-log tests/fixtures/deterministic/01-mislabeled-var-lib/avc.log \
   --manifest config/myapp.manifest.yml \
-  --existing-te selinux/myapp.te \
-  --existing-fc selinux/myapp.fc
+  --existing-te selinux/myapp/myapp.te \
+  --existing-fc selinux/myapp/myapp.fc
 
 python3 cli/deterministic_gen.py --explain \
-  --avc-log docs/examples/fixtures/deterministic/03-shadow-read/avc.log \
+  --avc-log tests/fixtures/deterministic/03-shadow-read/avc.log \
   --manifest config/myapp.manifest.yml \
-  --existing-te selinux/myapp.te \
-  --existing-fc selinux/myapp.fc
+  --existing-te selinux/myapp/myapp.te \
+  --existing-fc selinux/myapp/myapp.fc
 
 python3 cli/deterministic_gen.py --explain \
-  --avc-log docs/examples/fixtures/deterministic/12-execmem-review/avc.log \
+  --avc-log tests/fixtures/deterministic/12-execmem-review/avc.log \
   --manifest config/myapp.manifest.yml \
-  --existing-te selinux/myapp.te \
-  --existing-fc selinux/myapp.fc \
+  --existing-te selinux/myapp/myapp.te \
+  --existing-fc selinux/myapp/myapp.fc \
   --allow-needs-review
 ```
 
-Each invocation runs in `repo root` (no SELinux required). The first prints `[    fc_drift] myapp_t → var_lib_t:file {write}` with a restorecon note and exits 0. Compare it to `docs/examples/fixtures/deterministic/01-mislabeled-var-lib/expected.json`. The second prints `[   forbidden] myapp_t → shadow_t:file {open read}` and exits 1. Compare it to `docs/examples/fixtures/deterministic/03-shadow-read/case.meta.json`. The third prints `[needs_review] myapp_t → myapp_t:process {execmem}` with the full reviewer note. It also prints the proposed rule `→ allow myapp_t self:process execmem;`. It exits 0 as well. The opt-in flag clears the blocker. What stays behind is the note the reviewer has to weigh. Drop `--explain` and pass `--allow-needs-review`. That same line then lands in the generated `.te` under a `# Needs review` heading. The run exits 0, and the reviewer is on the hook for the decision the flag recorded.
+Each invocation runs in `repo root` (no SELinux required). The first prints `[    fc_drift] myapp_t → var_lib_t:file {write}` with a restorecon note and exits 0. Compare it to `tests/fixtures/deterministic/01-mislabeled-var-lib/expected.json`. The second prints `[   forbidden] myapp_t → shadow_t:file {open read}` and exits 1. Compare it to `tests/fixtures/deterministic/03-shadow-read/case.meta.json`. The third prints `[needs_review] myapp_t → myapp_t:process {execmem}` with the full reviewer note. It also prints the proposed rule `→ allow myapp_t self:process execmem;`. It exits 0 as well. The opt-in flag clears the blocker. What stays behind is the note the reviewer has to weigh. Drop `--explain` and pass `--allow-needs-review`. That same line then lands in the generated `.te` under a `# Needs review` heading. The run exits 0, and the reviewer is on the hook for the decision the flag recorded.
 
 
 :::

@@ -26,10 +26,15 @@ from boolean_hints import (  # noqa: E402
     render_boolean_finding,
     resolve_booleans_for_need,
 )
-from policy_rules import (  # noqa: E402
+from policy_rules import (
+    JAVA_EXEC_FILE_PERMS,  # noqa: E402
+    EXEC_BIN_EXCEPTION,
+    EXEC_BIN_REVIEW_NOTE,
+    EXEC_BIN_TYPES,
     FORBIDDEN_TARGET_TYPES,
     GENERIC_FILE_TYPES,
     GENERIC_PORT_TYPES,
+    STALE_ENTRYPOINT_TYPES,
     PATTERN_MACROS,
     VERDICT_BASELINE,
     VERDICT_DIRECT,
@@ -43,10 +48,10 @@ from policy_rules import (  # noqa: E402
     VERDICT_NEEDS_REVIEW,
     NEXT_ACTION,
     format_needs_review_note,
+    manifest_exception,
     needs_review_hits,
 )
-from selinux_gen import (  # noqa: E402
-    domain_for_app,
+from avc_parse import (  # noqa: E402
     format_version,
     parse_avc_line,
     parse_version,
@@ -174,6 +179,7 @@ class Finding:
     bind_port: int | None = None
     bind_proto: str = ""
     port_type: str = ""
+    review_key: str = ""
 
     @property
     def next_action(self) -> str:
@@ -224,6 +230,10 @@ def suggest_fc_type(path: str, manifest: dict) -> str | None:
             continue
         base = root.rstrip("/")
         if path == base or path.startswith(base + "/"):
+            # shopapi's .fc labels only bin/shopapi as the exec type. The jar
+            # and config under the same tree are shopapi_lib_t.
+            if suffix == "exec_t" and app == "shopapi" and path != f"{base}/bin/{app}":
+                return f"{app}_lib_t"
             return f"{app}_{suffix}"
     extras = paths.get("extra_fc_roots") or []
     if isinstance(extras, str):
@@ -273,7 +283,7 @@ def collapse_to_pattern(perms: frozenset[str]) -> str | None:
 def parse_avc_file(
     avc_path: Path, domains: set[str]
 ) -> tuple[list, dict[tuple[str, str, str], set[str]], dict[tuple[str, str, str], set[int]]]:
-    from selinux_gen import AvcEntry
+    from avc_parse import AvcEntry
 
     entries: list[AvcEntry] = []
     paths: dict[tuple[str, str, str], set[str]] = {}
@@ -300,6 +310,9 @@ def parse_avc_file(
     return entries, paths, ports
 
 
+_SEPOLGEN_IFSETS: dict[str, object] = {}
+
+
 def try_sepolgen_interface(
     src: str, tgt: str, tclass: str, perms: frozenset[str]
 ) -> tuple[str, str] | None | object:
@@ -312,12 +325,16 @@ def try_sepolgen_interface(
         return SEPOLGEN_UNAVAILABLE
 
     if_path = defaults.interface_info()
-    try:
-        with open(if_path, encoding="utf-8") as fd:
-            ifset = interfaces.InterfaceSet()
-            ifset.from_file(fd)
-    except OSError:
-        return SEPOLGEN_UNAVAILABLE
+    ifset = _SEPOLGEN_IFSETS.get(if_path)
+    if ifset is None:
+        # Parsing interface_info takes seconds. Do it once per run, not per denial.
+        try:
+            with open(if_path, encoding="utf-8") as fd:
+                ifset = interfaces.InterfaceSet()
+                ifset.from_file(fd)
+        except OSError:
+            return SEPOLGEN_UNAVAILABLE
+        _SEPOLGEN_IFSETS[if_path] = ifset
 
     try:
         av = access_mod.AccessVector([src, tgt, tclass, *sorted(perms)])
@@ -339,6 +356,9 @@ def baseline_macro_covers(need: AccessNeed, te_text: str) -> bool:
 
 
 def finding_needs_review_allowed(finding: Finding, args: argparse.Namespace) -> bool:
+    # bin_t execute is unlocked only by a reviewed reason in the app manifest.
+    if finding.review_key == EXEC_BIN_EXCEPTION:
+        return False
     if getattr(args, "allow_needs_review", False):
         return True
     allowed = {str(p).lower() for p in (getattr(args, "allow_needs_review_perm", None) or [])}
@@ -348,7 +368,7 @@ def finding_needs_review_allowed(finding: Finding, args: argparse.Namespace) -> 
 def generation_blockers(findings: list[Finding], args: argparse.Namespace) -> list[Finding]:
     blocked: list[Finding] = []
     for finding in findings:
-        if finding.verdict in (VERDICT_FORBIDDEN, VERDICT_TOOLCHAIN):
+        if finding.verdict == VERDICT_TOOLCHAIN:
             blocked.append(finding)
         elif finding.verdict == VERDICT_NEEDS_REVIEW and not finding_needs_review_allowed(
             finding, args
@@ -380,6 +400,46 @@ def classify(
             VERDICT_BASELINE,
             "",
             "Covered by dev_read_urand in reviewed baseline block.",
+            paths,
+        )
+
+    if (
+        tclass == "file"
+        and "entrypoint" in perms
+        and tgt in STALE_ENTRYPOINT_TYPES
+    ):
+        for path in paths:
+            want = suggest_fc_type(path, manifest)
+            if not want:
+                continue
+            if existing_fc_covers(path, want, existing_fc):
+                return Finding(
+                    need,
+                    VERDICT_FC_DRIFT,
+                    "",
+                    f"{path} is already covered by the .fc as {want}, but the denial "
+                    f"names {tgt}. The label on disk is stale. No allow is written. "
+                    f"Run: restorecon -Rv {path}",
+                    paths,
+                )
+            fc = (
+                f"{fc_regex_for_app_path(path, manifest)}    "
+                f"gen_context(system_u:object_r:{want},s0)"
+            )
+            return Finding(
+                need,
+                VERDICT_FC,
+                fc,
+                f"{path} is an entrypoint labeled {tgt}. Label it {want}. "
+                f"Do not allow {tgt}.",
+                paths,
+            )
+        return Finding(
+            need,
+            VERDICT_FC_DRIFT,
+            "",
+            f"entrypoint on shared type {tgt} is a stale label. "
+            f"Do not allow {tgt}. restorecon the module's exec type.",
             paths,
         )
 
@@ -432,7 +492,7 @@ def classify(
         if port is not None:
             note += (
                 f" Add to the app manifest selinux_ports "
-                f"(port {port}/{proto}, type {ptype}); canary seport registers it."
+                f"(port {port}/{proto}, type {ptype}); canary runs semanage port -a."
             )
         return Finding(
             need,
@@ -476,11 +536,15 @@ def classify(
         )
 
     if tgt == "tmp_t":
-        rendered = (
-            f"files_manage_generic_tmp_dirs({src})"
-            if tclass == "dir"
-            else f"files_manage_generic_tmp_files({src})"
-        )
+        if tclass == "dir":
+            rendered = f"files_manage_generic_tmp_dirs({src})"
+        else:
+            parts: list[str] = []
+            if "map" in perms:
+                parts.append(f"files_map_generic_tmp_files({src})")
+            if perms - {"map"}:
+                parts.append(f"files_manage_generic_tmp_files({src})")
+            rendered = "\n".join(parts) or f"files_manage_generic_tmp_files({src})"
         return Finding(
             need,
             VERDICT_INTERFACE,
@@ -524,6 +588,35 @@ def classify(
             "",
             "Already allowed in existing .te",
             paths,
+        )
+
+    if (
+        tgt in EXEC_BIN_TYPES
+        and tclass == "file"
+        and "execute" in need.perms
+        and "entrypoint" not in need.perms
+        and need.perms <= JAVA_EXEC_FILE_PERMS
+    ):
+        rendered = f"corecmd_exec_bin({src})"
+        ran = ", ".join(paths) if paths else "a program labeled bin_t"
+        reason = manifest_exception(manifest, EXEC_BIN_EXCEPTION)
+        if reason:
+            return Finding(
+                need,
+                VERDICT_INTERFACE,
+                rendered,
+                f"Reviewed exception (selinux_exceptions.exec_bin): {reason} Executed: {ran}.",
+                paths,
+                engine="house_rules",
+                review_key=EXEC_BIN_EXCEPTION,
+            )
+        return Finding(
+            need,
+            VERDICT_NEEDS_REVIEW,
+            rendered,
+            f"{EXEC_BIN_REVIEW_NOTE} Executed: {ran}.",
+            paths,
+            review_key=EXEC_BIN_EXCEPTION,
         )
 
     module_types = private_types(manifest) | domains_from_manifest(manifest)
@@ -676,6 +769,24 @@ def render_fragment(findings: list[Finding], meta: dict) -> str:
         rows = sorted({f.rendered for f in findings if f.verdict == verdict and f.rendered})
         if rows:
             lines.append(heading)
+            if verdict == VERDICT_DIRECT:
+                # A raw allow on a base type does not compile until the module
+                # requires that type. Types this module declares do not.
+                external = sorted(
+                    {
+                        f.need.tgt_type
+                        for f in findings
+                        if f.verdict == VERDICT_DIRECT
+                        and f.rendered.startswith("allow ")
+                        and not f.note.startswith("Module-private")
+                        and f.need.tgt_type not in ("", "self")
+                    }
+                )
+                if external:
+                    lines.append("gen_require(`")
+                    for tgt_type in external:
+                        lines.append(f"\ttype {tgt_type};")
+                    lines.append("')")
             lines.extend(rows)
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
@@ -799,7 +910,7 @@ def write_pr_summary(findings: list[Finding], app_name: str, meta: dict | None =
             if f.verdict == VERDICT_PORT and f.bind_port is not None:
                 lines.append(
                     f"- `{f.next_action}` — add to `config/{app_name}.manifest.yml` `selinux_ports` "
-                    "(canary seport registers it):"
+                    "(canary runs semanage port -a):"
                 )
                 lines.append("  ```yaml")
                 lines.append(f"  - port: {f.bind_port}")
@@ -896,6 +1007,7 @@ def write_findings_artifact(
                 "note": f.note,
                 "engine": f.engine,
                 **({"boolean": f.boolean} if f.boolean else {}),
+                **({"review_key": f.review_key} if f.review_key else {}),
                 **({"next_action": f.next_action} if f.next_action else {}),
                 **({"port": f.bind_port} if f.bind_port is not None else {}),
                 **({"proto": f.bind_proto} if f.bind_proto else {}),
@@ -986,10 +1098,10 @@ def run(args: argparse.Namespace) -> int:
 
     entries, path_map, port_map = parse_avc_file(args.avc_log, domains)
     merged = merge_avc_entries(entries)
-    net_new, _covered = subtract_covered(merged, parse_existing_allows(existing_te))
+    net_new, covered = subtract_covered(merged, parse_existing_allows(existing_te))
 
     findings: list[Finding] = []
-    for need in net_new:
+    for need in [*net_new, *covered]:
         paths = tuple(sorted(path_map.get(need.key, set())))
         bind_ports = tuple(sorted(port_map.get(need.key, set())))
         findings.append(
@@ -1031,7 +1143,8 @@ def run(args: argparse.Namespace) -> int:
             if f.rendered:
                 print(f"               → {f.rendered}")
         emit_degraded_warning(findings)
-        if blockers:
+        refused = any(f.verdict == VERDICT_FORBIDDEN for f in findings)
+        if blockers or refused:
             args.out_dir.mkdir(parents=True, exist_ok=True)
             write_findings_artifact(
                 args.out_dir,
@@ -1040,7 +1153,7 @@ def run(args: argparse.Namespace) -> int:
                 generation_blocked=True,
                 vendor_override=vendor_override,
             )
-        return 1 if blockers else 0
+        return 1 if blockers or refused else 0
 
     if blockers:
         review = [f for f in blockers if f.verdict == VERDICT_NEEDS_REVIEW]
@@ -1050,10 +1163,17 @@ def run(args: argparse.Namespace) -> int:
                 "\n*** GENERATION BLOCKED — fix sepolgen or remove base-type denials from AVC log ***\n",
                 file=sys.stderr,
             )
-        if review:
+        exec_bin = [f for f in review if f.review_key == EXEC_BIN_EXCEPTION]
+        if len(exec_bin) < len(review):
             print(
                 "\n*** GENERATION BLOCKED — domain-weakening permission requires "
                 "--allow-needs-review (or --allow-needs-review-perm) ***\n",
+                file=sys.stderr,
+            )
+        if exec_bin:
+            print(
+                f"\n*** GENERATION BLOCKED — executing a bin_t program needs a reviewed reason "
+                f"in the app manifest: selinux_exceptions.exec_bin ({args.manifest}) ***\n",
                 file=sys.stderr,
             )
         for f in blockers:
@@ -1072,6 +1192,54 @@ def run(args: argparse.Namespace) -> int:
         )
         print(f"\nWrote {args.out_dir}/findings.json (generation_blocked=true)\n", file=sys.stderr)
         return 1
+
+    forbidden = [f for f in findings if f.verdict == VERDICT_FORBIDDEN]
+    emittable = [
+        f
+        for f in findings
+        if f.rendered
+        and f.verdict
+        in (VERDICT_INTERFACE, VERDICT_DIRECT, VERDICT_PORT, VERDICT_NEEDS_REVIEW, VERDICT_FC)
+    ]
+    if forbidden and not emittable:
+        print(
+            "\n*** GENERATION BLOCKED — fix sepolgen or remove base-type denials from AVC log ***\n",
+            file=sys.stderr,
+        )
+        for f in forbidden:
+            print(f"REFUSED: {f.note}", file=sys.stderr)
+        write_findings_artifact(
+            args.out_dir,
+            findings,
+            artifact_ctx,
+            generation_blocked=True,
+            vendor_override=vendor_override,
+        )
+        (args.out_dir / "pr_summary.md").write_text(
+            write_pr_summary(findings, app_name, meta),
+            encoding="utf-8",
+        )
+        print(f"\nWrote {args.out_dir}/findings.json (generation_blocked=true)\n", file=sys.stderr)
+        return 1
+    if forbidden:
+        for f in forbidden:
+            print(f"REFUSED: {f.note}", file=sys.stderr)
+
+    if findings and all(f.verdict == VERDICT_BASELINE for f in findings):
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        out_te = existing_te if existing_te.endswith("\n") else existing_te + "\n"
+        out_fc = existing_fc if existing_fc.endswith("\n") else existing_fc + "\n"
+        (args.out_dir / f"{app_name}.te").write_text(out_te, encoding="utf-8")
+        (args.out_dir / f"{app_name}.fc").write_text(out_fc, encoding="utf-8")
+        write_findings_artifact(
+            args.out_dir,
+            findings,
+            artifact_ctx,
+            generation_blocked=False,
+            vendor_override=vendor_override,
+        )
+        print("No change")
+        return 0
 
     emit_degraded_warning(findings)
 

@@ -1,0 +1,1 @@
+attribute grant beyond control: can_read_shadow_passwords

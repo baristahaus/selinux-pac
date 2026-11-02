@@ -2,20 +2,17 @@
 #
 # dev_generate_policy.sh — One-command developer self-service policy generation
 #
-# Exports AVC logs, runs cli/deterministic_gen.py (+ optional summarize_pr.py), diffs against selinux/
+# Exports AVC logs, runs cli/deterministic_gen.py, diffs against selinux/
 # promotes generated policy into selinux/ for PR commit.
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-GEN="${PROJECT_ROOT}/cli/selinux_gen.py"
 DETERMINISTIC="${PROJECT_ROOT}/cli/deterministic_gen.py"
 VERIFY_AVC="${PROJECT_ROOT}/cli/verify_avc_coverage.py"
-APP_NAME="${POLICY_APP:-myapp}"
-DOMAIN="${SELINUX_DOMAIN:-myapp_t}"
-ENGINE="${POLICY_ENGINE:-deterministic}"
-LLM_SUMMARY="${POLICY_SUMMARY_LLM:-0}"
+APP_NAME=""
+DOMAIN=""
 APPLY=0
 ENFORCE_CHECK=0
 SKIP_EXPORT=0
@@ -24,6 +21,7 @@ FORCE=0
 FORCE_REASON=""
 TUNE_REPORT=0
 ALLOW_NEEDS_REVIEW=0
+ALLOW_NEEDS_REVIEW_PERMS=()
 PRIMARY_SERVICE="${PRIMARY_SERVICE:-}"
 OUT_DIR_ARG=""
 AVC_LOG_ARG=""
@@ -55,8 +53,6 @@ Usage: $(basename "$0") [options]
 Developer self-service: export AVCs → generate policy → diff → optional promote to selinux/
 
 Options:
-  --engine MODE    deterministic (default); llm is deprecated → deterministic + --llm-summary
-  --llm-summary    After generation, polish pr_summary.md narrative via OpenAI (needs OPENAI_API_KEY)
   --apply          Copy policy_out/{app}.te/.fc into selinux/ after generation
   --enforce-check  Load candidate policy enforcing and run endpoint + domain checks
   --open-pr        Run gh pr create with assembled pr_body.md (requires gh CLI + git branch)
@@ -74,17 +70,12 @@ Options:
   -h, --help       Show this help
 
 Environment:
-  OPENAI_API_KEY   Required only for --llm-summary (or POLICY_SUMMARY_LLM=1)
-  POLICY_ENGINE    Default: deterministic
-  POLICY_SUMMARY_LLM  Set to 1 to run cli/summarize_pr.py after generation
   POLICY_ALLOW_DEGRADED  Pass --allow-degraded to deterministic_gen when sepolgen missing
   POLICY_ALLOW_NEEDS_REVIEW  Pass --allow-needs-review (domain-weakening allows)
-  OPENAI_BASE_URL  Optional LiteLLM endpoint
-  OPENAI_API_MODEL Optional model override
 
 Example:
   sudo bash scripts/dev_generate_policy.sh --apply
-  bash scripts/dev_generate_policy.sh --llm-summary --skip-export   # optional admin prose
+  bash scripts/dev_generate_policy.sh --skip-export
   bash scripts/dev_generate_policy.sh --tune-report --app-name tomcat --unit tomcat.service
   bash scripts/dev_generate_policy.sh --force "non-standard layout vs jws6_tomcat" --apply
   git checkout -b policy/update && git add selinux/ && gh pr create --body-file policy_out/pr_body.md
@@ -109,9 +100,11 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --allow-needs-review) ALLOW_NEEDS_REVIEW=1; shift ;;
-        --engine) ENGINE="$2"; shift 2 ;;
-        --llm-summary) LLM_SUMMARY=1; shift ;;
-        --app-name) APP_NAME="$2"; DOMAIN="${APP_NAME}_t"; shift 2 ;;
+        --allow-needs-review-perm)
+            ALLOW_NEEDS_REVIEW_PERMS+=("$2")
+            shift 2
+            ;;
+        --app-name|--app) APP_NAME="$2"; shift 2 ;;
         --unit) PRIMARY_SERVICE="$2"; shift 2 ;;
         --app-root) APP_ROOT="$2"; shift 2 ;;
         --out-dir) OUT_DIR_ARG="$2"; shift 2 ;;
@@ -129,17 +122,19 @@ bind_app_tree "${PROJECT_ROOT}"
 SELINUX_DIR="${APP_ROOT}/selinux"
 POLICY_OUT="${OUT_DIR_ARG:-${APP_ROOT}/policy_out}"
 AVC_LOG="${AVC_LOG_ARG:-${POLICY_OUT}/avc.log}"
-if [[ -n "${APP_MANIFEST:-}" ]]; then
-    MANIFEST="${APP_MANIFEST}"
-else
-    MANIFEST="${APP_ROOT}/config/${APP_NAME}.manifest.yml"
-    [[ -f "${MANIFEST}" ]] || MANIFEST="${APP_ROOT}/config/myapp.manifest.yml"
+if [[ -z "${APP_NAME}" ]]; then
+    log_error "--app-name NAME is required"
+    exit 2
+fi
+MANIFEST="${APP_ROOT}/config/${APP_NAME}.manifest.yml"
+if [[ "${TUNE_REPORT}" -eq 0 ]]; then
+    [[ -f "${MANIFEST}" ]] || { log_error "No manifest for ${APP_NAME}: ${MANIFEST}"; exit 1; }
 fi
 log_info "App tree ${APP_ROOT} (tool ${PROJECT_ROOT})"
 
 sync_identity_from_manifest() {
     [[ -f "${MANIFEST}" ]] || {
-        log_error "App manifest not found: ${MANIFEST} (set POLICY_APP or APP_MANIFEST)"
+        log_error "App manifest not found: ${MANIFEST}"
         exit 1
     }
     source_app_manifest_exports "${MANIFEST}"
@@ -209,6 +204,9 @@ run_tune_report() {
             package_installed|package_available|unconfined)
                 log_info "situation=${situation} — install or enable the vendor RPM first. --tune-report is for loaded/base_policy."
                 ;;
+            loaded_unconfined)
+                log_info "situation=loaded_unconfined — the loaded domain is unconfined. Install the vendor's confining package, or generate with --force \"reason\". No module written."
+                ;;
             *)
                 log_info "situation=${situation:-unknown} — not a tune case. No module written."
                 ;;
@@ -223,7 +221,8 @@ run_tune_report() {
     if [[ "${SKIP_EXPORT}" -eq 0 && -z "${AVC_LOG_ARG:-}" ]]; then
         # shellcheck source=lib/avc_query.sh
         source "${SCRIPT_DIR}/lib/avc_query.sh"
-        if command -v ausearch >/dev/null 2>&1 || [[ -f /var/log/audit/audit.log ]]; then
+        audit_log="${AUDIT_LOG:-/var/log/audit/audit.log}"
+        if command -v ausearch >/dev/null 2>&1 || [[ -f "${audit_log}" ]]; then
             log_info "Collecting denials for vendor domain ${domain} (read-only)..."
             export_vendor_domain_avcs_to_file "${AVC_LOG}" "${domain}" boot || true
         elif [[ ! -s "${AVC_LOG}" ]]; then
@@ -234,7 +233,8 @@ run_tune_report() {
             return 0
         fi
     elif [[ ! -s "${AVC_LOG}" ]]; then
-        if command -v ausearch >/dev/null 2>&1 || [[ -f /var/log/audit/audit.log ]]; then
+        audit_log="${AUDIT_LOG:-/var/log/audit/audit.log}"
+        if command -v ausearch >/dev/null 2>&1 || [[ -f "${audit_log}" ]]; then
             :
         else
             log_info "${skip_notice}"
@@ -260,14 +260,6 @@ run_tune_report() {
         --situation "${situation}" \
         --fc-type "${fc_type}" \
         --port-type "${port_type}"
-}
-
-require_api_key() {
-    [[ "${LLM_SUMMARY}" -eq 1 ]] || return 0
-    [[ -n "${OPENAI_API_KEY:-}" ]] || {
-        log_error "Set OPENAI_API_KEY for --llm-summary (or unset POLICY_SUMMARY_LLM)"
-        exit 1
-    }
 }
 
 resolve_manifest_policy_paths() {
@@ -356,7 +348,7 @@ export_avcs() {
     export_app_avcs_to_file "${AVC_LOG}" boot "${PRIMARY_DOMAIN}" "${BACKEND_DOMAIN:-}" "${PATHS_CSV}"
     [[ -s "${AVC_LOG}" ]] || {
         log_error "No AVC lines in ${AVC_LOG}. Exercise the app first (shopapi: curl /health /state /log)."
-        echo "  sudo bash scripts/demo_bootstrap.sh --shopapi-only"
+        echo "  sudo bash lab/demo_bootstrap.sh --shopapi-only"
         echo "  curl http://127.0.0.1:8091/health"
         exit 1
     }
@@ -364,11 +356,6 @@ export_avcs() {
 }
 
 generate_policy() {
-    if [[ "${ENGINE}" == llm ]]; then
-        log_warn "--engine llm is deprecated; using deterministic + --llm-summary"
-        ENGINE=deterministic
-        LLM_SUMMARY=1
-    fi
     log_info "Running cli/deterministic_gen.py (policy)..."
     if [[ "${ALLOW_NEEDS_REVIEW}" -eq 1 ]]; then
         export POLICY_ALLOW_NEEDS_REVIEW=1
@@ -381,7 +368,6 @@ generate_policy() {
         "${POLICY_VERSION_FILE}" \
         "${POLICY_OUT}" \
         "${APP_NAME}"
-    run_llm_pr_summary_if_requested "${POLICY_OUT}" "${APP_NAME}"
 }
 
 show_diff() {
@@ -453,7 +439,7 @@ open_pr() {
     git -C "${APP_ROOT}" add \
         "selinux/${APP_NAME}.te" \
         "selinux/${APP_NAME}.fc" \
-        "selinux/policy_version.txt"
+        "selinux/myapp/policy_version.txt"
     if git -C "${APP_ROOT}" diff --cached --quiet; then
         log_error "Nothing to commit — run with --apply after generation"
         return 1
@@ -494,8 +480,19 @@ run_enforce_check() {
 
     semodule -i "${pp_path}"
     semanage permissive -d "${DOMAIN}" 2>/dev/null || true
-    restorecon -Rv /opt/myapp /var/lib/myapp /var/log/myapp /run/myapp 2>/dev/null || true
-    systemctl restart myapp-backend.service myapp.service
+    if [[ -z "${PATHS_CSV:-}" || -z "${PRIMARY_SERVICE:-}" ]]; then
+        log_error "enforce-check needs the manifest paths and primary unit"
+        return 1
+    fi
+    local -a restore_paths=()
+    local -a units=()
+    IFS=',' read -r -a restore_paths <<< "${PATHS_CSV}"
+    restorecon -Rv "${restore_paths[@]}" 2>/dev/null || true
+    if [[ "${HAS_BACKEND:-0}" == "1" && -n "${BACKEND_SERVICE:-}" ]]; then
+        units+=("${BACKEND_SERVICE}")
+    fi
+    units+=("${PRIMARY_SERVICE}")
+    systemctl restart "${units[@]}"
     if bash "${SCRIPT_DIR}/wait_for_endpoints.sh" --host 127.0.0.1 --retries 10 --delay 2; then
         log_info "enforce-check passed under enforcing ${DOMAIN}"
         return 0
@@ -508,6 +505,12 @@ run_enforce_check() {
 }
 
 print_pr_steps() {
+    local mod_dir_rel=""
+    mod_dir_rel="$(python3 -c "
+import sys, yaml
+m = yaml.safe_load(open(sys.argv[1], encoding='utf-8'))
+print(m.get('policy', {}).get('module_dir', 'selinux'))
+" "${MANIFEST}" 2>/dev/null || echo "selinux")"
     cat <<EOF
 
 --- Next steps (Git PR handoff) ---
@@ -516,13 +519,11 @@ print_pr_steps() {
    cat policy_out/pr_body.md
 
 2. Validate locally (matches CI):
-   bash scripts/compile_and_validate.sh selinux
-   bash scripts/validate_forbidden_patterns.sh selinux
-   python3 scripts/smoke_test.py
+   sepac check ${APP_NAME}
 
 3. Commit, push, and open PR:
    git checkout -b policy/${APP_NAME}-update
-   git add selinux/${APP_NAME}.te selinux/${APP_NAME}.fc selinux/policy_version.txt
+   git add ${mod_dir_rel}/${APP_NAME}.te ${mod_dir_rel}/${APP_NAME}.fc ${mod_dir_rel}/policy_version.txt
    git commit -m "security(selinux): Update policy module for ${APP_NAME}"
    git push -u origin policy/${APP_NAME}-update
    gh pr create \\
@@ -542,7 +543,6 @@ main() {
         return 0
     fi
 
-    require_api_key
     sync_identity_from_manifest
     check_vendor_policy
     require_existing_policy

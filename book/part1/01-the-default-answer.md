@@ -108,7 +108,7 @@ The correct answer is a sentence an administrator can review: *no, but policy al
 both are reviewable: one line of file-context policy, and one `restorecon` at deploy time.
 
 ::: try Your first denial, safely
-On the lab host from [Your Lab](lab.md), watch a real denial without breaking anything:
+On the lab host from [Your Lab](../lab.md), watch a real denial without breaking anything:
 
 ```bash
 # sudo ausearch -m avc -ts recent | tail -n 5

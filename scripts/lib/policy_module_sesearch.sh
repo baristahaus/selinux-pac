@@ -13,11 +13,13 @@ append_domain_allows() {
         return 1
     }
 
-    local chunk errf
+    local chunk errf ec
     chunk="$(mktemp)"
     errf="$(mktemp)"
-    sesearch --allow -s "${domain}" "${policy_kern}" >"${chunk}" 2>"${errf}"
-    local ec=$?
+    # set -e would abort on sesearch's exit 1 (no rules, or a domain the
+    # candidate does not define yet) before the status check below.
+    ec=0
+    sesearch --allow -s "${domain}" "${policy_kern}" >"${chunk}" 2>"${errf}" || ec=$?
     if [[ -s "${errf}" ]]; then
         cat "${errf}" >&2
         rm -f "${chunk}" "${errf}"
@@ -28,7 +30,8 @@ append_domain_allows() {
         return "${ec}"
     fi
     if [[ -s "${chunk}" ]]; then
-        sort -u "${chunk}" >> "${dest}"
+        # "X is not a valid type attribute" is stdout, not a rule.
+        grep -E '^[[:space:]]*allow ' "${chunk}" | sort -u >> "${dest}" || true
     fi
     rm -f "${chunk}" "${errf}"
 }

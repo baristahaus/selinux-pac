@@ -16,7 +16,7 @@ Three answers are real:
 
 The trade-off is not a free choice. Every extra domain you create costs you a review signature on a policy PR. Every rule you add inside it costs you the same signature. But every missing domain you merge costs you a blast radius on compromise.
 
-The recommendation for service authors is the one that matches the privilege of the process it protects. **Each long-running component with a different privilege profile owns its own domain.** That is what `selinux/myapp.te` demonstrates, and it is the answer we land on in [Two processes, one application](#two-processes-one-application).
+The recommendation for service authors is the one that matches the privilege of the process it protects. **Each long-running component with a different privilege profile owns its own domain.** That is what `selinux/myapp/myapp.te` demonstrates, and it is the answer we land on in [Two processes, one application](#two-processes-one-application).
 
 :::: why One domain per service is the default
 If every process is one domain, you have a clean blast radius. The same domain, the same allows, the same review. The cost is rule volume: every process you add inherits the rule template, and each gets reviewed once. The alternative, one `unconfined_t` for everything, pays no rule tax and trades all of it in. A compromise of any process becomes a compromise of the host.
@@ -35,7 +35,7 @@ $ systemctl show shopapi.service -p SELinuxContext
 SELinuxContext=system_u:system_r:shopapi_t:s0
 ```
 
-`SELinuxContext=` sets the label. It does not make the binary executable. The domain you name still needs `execute` on its entrypoint, which is why the demo never runs `/usr/bin/java`. `demo/shopapi/shopapi.service` runs `/opt/shopapi/bin/java`. That is a private copy of the JRE launcher that `scripts/lib/demo_estate.sh` installs under the application's own root, and `selinux/shopapi/shopapi.fc` labels that path `shopapi_exec_t`. Running the shared `/usr/bin/java` instead gives you `bin_t`. That is a type the forbidden-pattern gate refuses to let a domain execute. Under enforcing, it also gives a `203/EXEC` when no allow covers it.
+`SELinuxContext=` sets the label. It does not make the binary executable. The domain you name still needs `execute` on its entrypoint, which is why the demo never runs `/usr/bin/java`. `lab/apps/shopapi/shopapi.service` runs `/opt/shopapi/bin/java`. That is a private copy of the JRE launcher that `lab/lib/demo_estate.sh` installs under the application's own root, and `selinux/shopapi/shopapi.fc` labels that path `shopapi_exec_t`. Running the shared `/usr/bin/java` instead gives you `bin_t`. That is a type the forbidden-pattern gate refuses to let a domain execute. Under enforcing, it also gives a `203/EXEC` when no allow covers it.
 
 The pattern is appropriate when the application owns its install root and you want the domain fixed at start time rather than inferred at exec. The review cost is narrow: you sign off the `SELinuxContext=` line and the file context of the entrypoint it runs.
 
@@ -62,7 +62,7 @@ fi
 
 `bin_t` is the type of the system's own binaries: `/usr/bin`, `/usr/sbin`, `/usr/libexec`. They are mode `0755`, so world-readable and world-executable, and reachable by nearly every domain on the box. Granting a domain `allow shopapi_t bin_t:file execute` lets that domain exec *every* system binary, from `/usr/sbin/useradd` to `/usr/libexec/platform-python`. That breadth is why the rule is forbidden: every application gets its own `exec_t` declared in the `.fc` file, so `allow shopapi_t shopapi_exec_t:file execute` is legible and scoped.
 
-That is why both start options above end in the same place: an entrypoint the application owns. For a JVM the demo gets there by installing its own launcher. `scripts/lib/demo_estate.sh` copies `/usr/bin/java` into the app root, because a system-wide relabel of the shared launcher is exactly what the gate refuses. With a labeled entrypoint in place you have two choices. You can let `type_transition` from `init_t` move the process, which is what `init_daemon_domain` wires. Or you can set the domain explicitly with `SELinuxContext=`. The demo does both.
+That is why both start options above end in the same place: an entrypoint the application owns. For a JVM the demo gets there by installing its own launcher. `lab/lib/demo_estate.sh` copies `/usr/bin/java` into the app root, because a system-wide relabel of the shared launcher is exactly what the gate refuses. With a labeled entrypoint in place you have two choices. You can let `type_transition` from `init_t` move the process, which is what `init_daemon_domain` wires. Or you can set the domain explicitly with `SELinuxContext=`. The demo does both.
 
 ## Entry points and the helpers you already know
 
@@ -70,26 +70,16 @@ Every daemon module starts with a pair of macros. They look small, but they each
 
 | Macro | Purpose | What it does, and what it does not |
 |-------|---------|------------------------------------|
-| `init_daemon_domain(domain, exec_type)` | declare the daemon domain, its entrypoint, and the transition from the init domain through that entrypoint | declares the domain/entrypoint relationship and the transition out of the init domain. It does **not** write the daemon's runtime baseline: `files_read_etc_files(<domain>)`, `sysnet_read_config(<domain>)` and the rest are separate lines, which `selinux/myapp.te` collects under its own *Daemon baseline* heading |
-| `init_daemon_run_dir(run_type, "name")` | declare the runtime directory the init domain creates for the service | declares the type as the `/run/<name>` home. It does **not** call `files_pid_file()`. Both modules declare that themselves (`selinux/myapp.te` line 22, `selinux/shopapi/shopapi.te` line 26). The domain's own `dir { add_name remove_name write … }` access is written where it is needed |
+| `init_daemon_domain(domain, exec_type)` | declare the daemon domain, its entrypoint, and the transition from the init domain through that entrypoint | declares the domain/entrypoint relationship and the transition out of the init domain. It does **not** write the daemon's runtime baseline: `files_read_etc_files(<domain>)`, `sysnet_read_config(<domain>)` and the rest are separate lines, which `selinux/myapp/myapp.te` collects under its own *Daemon baseline* heading |
+| `init_daemon_run_dir(run_type, "name")` | declare the runtime directory the init domain creates for the service | declares the type as the `/run/<name>` home. It does **not** call `files_pid_file()`. Both modules declare that themselves (`selinux/myapp/myapp.te` line 22, `selinux/shopapi/shopapi.te` line 36). The domain's own `dir { add_name remove_name write … }` access is written where it is needed |
 
 `init_daemon_domain` is the entry-point and the transition in one line. `init_daemon_run_dir` is the runtime home: systemd creates `/run/<name>`, and the policy knows the type. Both come from the base policy and change with its version. So when a module needs a permission a macro does not emit, the module says so explicitly rather than assuming. Each macro is a block of review. Do not widen one AVC at a time.
 
-Where `selinux/myapp.te` also writes the init-domain side by hand, it declares what that needs:
-
-```text
-require {
-    type init_t;
-    class process { transition dyntransition siginh rlimitinh };
-    class file entrypoint;
-}
-```
-
-It does that because the module starts user units on FCOS, where systemd runs as `init_t`. The comment above those rules says so, and the raw `allow init_t myapp_exec_t:file { … entrypoint }` and `type_transition init_t myapp_exec_t:process myapp_t` follow it. Modules that rely on the macro alone carry no such block: `selinux/shopapi/shopapi.te` and `selinux/payments/payments.te` declare neither `init_t` nor a `require` section.
+`selinux/myapp/myapp.te` does not write the init-domain side by hand. It calls `init_daemon_domain` for both domains, and the macro supplies the `require` block and the transition. Modules that use the macro carry no raw `init_t` rules: `selinux/shopapi/shopapi.te` and `selinux/payments/payments.te` do the same.
 
 ## Two processes, one application
 
-`selinux/myapp.te` is the reference for the multi-process case. It declares two domains:
+`selinux/myapp/myapp.te` is the reference for the multi-process case. It declares two domains:
 
 ```text
 type myapp_t;            # Flask application domain
@@ -108,7 +98,7 @@ This split is worth it when the backend has a different privilege profile. That 
 
 ## systemd hardening and policy surface
 
-A systemd unit already hardens the process before SELinux sees it. `demo/shopapi/shopapi.service` ships with:
+A systemd unit already hardens the process before SELinux sees it. `lab/apps/shopapi/shopapi.service` ships with:
 
 ```text
 NoNewPrivileges=false
@@ -119,7 +109,7 @@ RuntimeDirectory=shopapi
 
 `StateDirectory=shopapi`, `LogsDirectory=shopapi` and `RuntimeDirectory=shopapi` are the three paths the manifest names as `var_dir`, `log_dir` and `runtime_dir`. They are also the three paths `selinux/shopapi/shopapi.fc` labels `shopapi_var_lib_t`, `shopapi_log_t` and `shopapi_var_run_t`. The unit creates the directories. The `.fc` gives them their types. The module's allows decide what the domain can do inside them.
 
-Hardening that removes access reduces the policy surface. Read the unit before writing allows. If the unit sets `PrivateTmp` and the app writes state under `/tmp`, your allows will need a broader file class than you expected. If the unit sets `NoNewPrivileges=true`, the kernel refuses the SELinux `type_transition` from `init_t` into your domain on RHEL. The process then stays in the init domain. That is why the shipped unit keeps it `NoNewPrivileges=false` for a labeled daemon. An app that needs `execmem` is a separate security decision: the generator routes it to `needs_review` rather than writing an allow (`docs/examples/fixtures/deterministic/12-execmem-review/`).
+Hardening that removes access reduces the policy surface. Read the unit before writing allows. If the unit sets `PrivateTmp` and the app writes state under `/tmp`, your allows will need a broader file class than you expected. If the unit sets `NoNewPrivileges=true`, the kernel refuses the SELinux `type_transition` from `init_t` into your domain on RHEL. The process then stays in the init domain. That is why the shipped unit keeps it `NoNewPrivileges=false` for a labeled daemon. An app that needs `execmem` is a separate security decision: the generator routes it to `needs_review` rather than writing an allow (`tests/fixtures/deterministic/12-execmem-review/`).
 
 ::: why Always read the unit
 The unit tells the policy what paths exist and what access the process already lost. You write `allow` only for the access the hardening did not remove. A rule you add for access the unit already blocks is extra review.
@@ -168,7 +158,7 @@ Each start option has a mechanism, a trigger, and a review cost.
 | labeled entrypoint + `type_transition` | `.fc` labels the binary. The policy transitions from `init_t` | the same entrypoint, but you want the kernel to derive the domain | the same file context declaration, plus `init_daemon_domain` | sign off the file type declaration and the transition |
 | no domain, `unconfined_t` | nothing: the JVM stays unconfined | first install, before the module lands | none | none, but compromise is a compromise |
 
-The demo uses both at once. That is the honest reading of `selinux/shopapi/` and `demo/shopapi/shopapi.service`. The label on the entrypoint is what makes the exec legal. `SELinuxContext=` is what makes the domain deterministic at start time.
+The demo uses both at once. That is the honest reading of `selinux/shopapi/` and `lab/apps/shopapi/shopapi.service`. The label on the entrypoint is what makes the exec legal. `SELinuxContext=` is what makes the domain deterministic at start time.
 
 ## What you can do now
 

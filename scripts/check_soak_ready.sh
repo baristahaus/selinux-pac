@@ -8,20 +8,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/avc_query.sh
 source "${SCRIPT_DIR}/lib/avc_query.sh"
 
-DOMAIN="${SELINUX_DOMAIN:-myapp_t}"
-MARKER_FILE="${SOAK_MARKER_FILE:-/var/lib/myapp/selinux_canary_deployed_at}"
-REPORT_FILE="${DEPLOY_REPORT_FILE:-/var/lib/myapp/selinux_deploy_report.json}"
+DOMAIN=""
+MARKER_FILE=""
+REPORT_FILE=""
 MIN_DAYS="${SOAK_MIN_DAYS:-7}"
 MAX_AVC="${SOAK_MAX_AVC:-0}"
 SKIP_SELINUX="${SKIP_SELINUX:-0}"
-# Optional --auto-tier: gated on tests/fixtures/blast_radius/ (CI job blast-radius).
 AUTO_TIER="${SOAK_AUTO_TIER:-0}"
 BASE_POLICY="${SOAK_BASE_POLICY:-}"
 CANDIDATE_POLICY="${SOAK_CANDIDATE_POLICY:-}"
-APP_DOMAIN="${SELINUX_APP_DOMAIN:-myapp_t}"
-BACKEND_DOMAIN="${SELINUX_BACKEND_DOMAIN:-myapp_backend_t}"
+APP_DOMAIN=""
+BACKEND_DOMAIN=""
 CLASSIFY_SCRIPT="${SCRIPT_DIR}/classify_policy_blast_radius.sh"
 MANIFEST=""
+_APP_NAME=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -40,7 +40,7 @@ and last deploy report shows endpoint coverage.
 Options:
   --domain NAME         SELinux domain (default: myapp_t)
   --marker-file PATH    Canary deploy timestamp file (epoch seconds)
-  --report-file PATH    Deploy report JSON (default: /var/lib/myapp/selinux_deploy_report.json)
+  --report-file PATH    Deploy report JSON (default: /var/lib/selinux-policy-ops/myapp/selinux_deploy_report.json)
   --min-days N          Minimum soak days (default: 7)
   --max-avc N           Maximum allowed AVC events since canary (default: 0)
   --auto-tier           Set minimum soak from classify_policy_blast_radius.sh (requires base + candidate policy paths)
@@ -57,6 +57,7 @@ SKIP_IF_UNAVAILABLE=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --domain) DOMAIN="$2"; shift 2 ;;
+        --app-name|--app) _APP_NAME="$2"; shift 2 ;;
         --marker-file) MARKER_FILE="$2"; shift 2 ;;
         --report-file) REPORT_FILE="$2"; shift 2 ;;
         --min-days) MIN_DAYS="$2"; shift 2 ;;
@@ -75,6 +76,14 @@ if [[ "${SKIP_SELINUX}" == "1" ]]; then
     log_info "SKIP_SELINUX=1 — skipping soak gate"
     exit 0
 fi
+
+[[ -n "${_APP_NAME}" ]] || { log_error "--app-name NAME is required"; exit 2; }
+DOMAIN="${DOMAIN:-${_APP_NAME}_t}"
+APP_DOMAIN="${APP_DOMAIN:-${_APP_NAME}_t}"
+BACKEND_DOMAIN="${BACKEND_DOMAIN:-${_APP_NAME}_backend_t}"
+_OPS_DIR="/var/lib/selinux-policy-ops/${_APP_NAME}"
+MARKER_FILE="${MARKER_FILE:-${_OPS_DIR}/selinux_canary_deployed_at}"
+REPORT_FILE="${REPORT_FILE:-${_OPS_DIR}/selinux_deploy_report.json}"
 
 if [[ ! -f "${MARKER_FILE}" ]]; then
     if [[ "${SKIP_IF_UNAVAILABLE}" -eq 1 ]]; then
@@ -147,8 +156,7 @@ fi
 
 now_epoch="$(date +%s)"
 days_elapsed=$(( (now_epoch - deploy_epoch) / 86400 ))
-since_ts="$(avc_epoch_to_ts "${deploy_epoch}")"
-avc_count="$(count_domain_events_since "${DOMAIN}" "${since_ts}")"
+avc_count="$(count_domain_events_since "${DOMAIN}" "${deploy_epoch}")"
 
 log_info "Soak: ${days_elapsed} day(s) elapsed (minimum ${MIN_DAYS})"
 log_info "Events since canary deploy for ${DOMAIN}: ${avc_count} (maximum ${MAX_AVC})"
